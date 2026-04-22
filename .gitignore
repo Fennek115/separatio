@@ -1,0 +1,20 @@
+# Generated reports and cache
+reports/
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Windows/WSL artifacts
+*.Zone.Identifier
+
+# Editor
+.vscode/
+.idea/
