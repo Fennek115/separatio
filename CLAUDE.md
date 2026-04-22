@@ -38,49 +38,57 @@ Environment="OLLAMA_MAX_LOADED_MODELS=1"
 | Stage 2: per-article JSON extraction | `qwen3.5:4b` | ~3.2 GB | `think=False` |
 | Stage 3: consolidated report | `qwen3.5:9b` | ~7.2 GB | `think=True` |
 
-**Sequential swap**: models are never loaded simultaneously. Ollama auto-evicts when RAM is needed. To force early eviction after Stage 2, pass `keep_alive=0` on the last Stage 2 call (not currently implemented).
+**Sequential swap**: `unload_model()` in `analyzer.py` makes an explicit `keep_alive=0` call after Stage 2 completes to force eviction of the 4b model before Stage 3 loads the 9b.
 
-`PARALLEL_WORKERS=2` for Stage 2: 2 × 3.2 GB = ~6.4 GB peak, within the 10 GB limit.
+**`PARALLEL_WORKERS=1`**: CPU-only Ollama serializes requests to the same model. With 2 workers, the second request queues behind the first and its httpx timeout fires before Ollama starts processing it. Only raise this if running with GPU or a truly concurrent Ollama setup.
 
 ## Pipeline architecture
 
 ```
-Miniflux API (unread articles)
+Miniflux API (unread articles, ordered by published_at desc)
      │
      ▼ extractor.py
-  1. Feed content (if len > 300 chars)
+  1. Feed content if has_full_content(min_length)
   2. Trafilatura web scrape fallback
   3. BeautifulSoup fallback
   4. Title-only last resort
   → Truncated to ~800 tokens (4 chars ≈ 1 token)
 
-     │ (PARALLEL_WORKERS=2 threads)
+     │ (PARALLEL_WORKERS=1)
      ▼ analyzer.py → qwen3.5:4b (think=False, num_ctx=2048)
   Extracts JSON: threat_type, severity, actors, CVEs, IOCs → ArticleSummary
+  On JSONDecodeError: 1 automatic retry before discarding
   Cached to: reports/summaries-cache-YYYY-MM-DD.json
 
-     │ (model swap)
-     ▼ analyzer.py → qwen3.5:9b (think=True, num_ctx=16384)
+     │ (unload_model: explicit keep_alive=0 to free RAM)
+     ▼ analyzer.py → qwen3.5:9b (think=True, num_ctx=16384, stream=True)
   Receives all summaries sorted by severity_score (desc)
-  Generates Markdown report
+  Generates Markdown report via streaming (logs progress every 100 tokens)
 
      ▼ reporter.py
   reports/threat-briefing-YYYY-MM-DD.{md,html}
+  pipeline.log written to OUTPUT_DIR (not the working directory)
 ```
 
 ## Non-obvious implementation details
 
-**`think` parameter**: qwen3.5 models support `options={"think": False}` via the Ollama Python client to disable chain-of-thought. Stage 2 disables it for cleaner JSON output; Stage 3 enables it for better report synthesis. The pipeline strips any residual `<think>...</think>` blocks via regex before using the output.
+**`think` and `keep_alive` are top-level `chat()` params**: in the Ollama Python client they are NOT inside the `options` dict — they are direct keyword arguments to `client.chat()`. `options` only accepts model parameters (temperature, num_ctx, num_thread, etc.).
 
-**Cache/resume**: Stage 2 writes `summaries-cache-YYYY-MM-DD.json` before Stage 3 runs. `--report-only` loads this cache and skips Stages 1–2. Cache loading uses `s.__dict__.update(d)` which is order-dependent — construct the `ArticleSummary` first with required fields, then update.
+**`timeout` goes to the Client constructor**: `ollama.Client(host=..., timeout=N)` passes the value to httpx. Passing it anywhere else has no effect. For streaming (Stage 3), timeout applies between chunks — not to the total generation — so long thinking runs don't time out as long as the model keeps producing tokens.
 
-**`FEED_CATEGORIES` filter**: takes category title strings (e.g. `"Vulnerability"`), not IDs. Filtering happens in `pipeline.py:stage1_fetch` after fetching from Miniflux, not at the API level.
+**Separate timeouts per stage** (`config.py`):
+- `SUMMARY_TIMEOUT = 240` — qwen3.5:4b without thinking, ~2 min per article on i7-10510U
+- `REPORT_TIMEOUT = 900` — applies between streaming chunks; actual generation can take 30-60 min
 
-**Miniflux auth**: `MinifluxClient` prefers `MINIFLUX_API_TOKEN` (header `X-Auth-Token`) over username/password. Set `MINIFLUX_API_TOKEN` in `config.py` for production use.
+**Stage 3 uses streaming**: `generate_report()` uses `stream=True` to avoid a single-response timeout on long generations. Tokens are accumulated and joined before stripping `<think>` blocks. Without streaming, a 2000-token report at 1 tok/sec would need a 2000s timeout.
 
-**`jinja2` in `requirements.txt` is unused**: `reporter.py` implements its own `markdown_to_html_body()` converter without Jinja2. Do not add Jinja2 rendering without removing the custom converter.
+**Cache/resume**: Stage 2 writes `summaries-cache-YYYY-MM-DD.json` before Stage 3 runs. `--report-only` loads this cache and skips Stages 1–2. Useful when tweaking the Stage 3 prompt or if Stage 3 failed — no need to re-run the 30+ min of summaries.
 
-**Stale model names**: `README.md` and the HTML footer in `reporter.py` still reference "Mistral 7B + Phi-4" — the actual models are `qwen3.5:4b` and `qwen3.5:9b`.
+**`FEED_CATEGORIES` filter**: takes category title strings (e.g. `"Vulnerability"`), not IDs. Filtering happens in `pipeline.py:stage1_fetch` after fetching from Miniflux, not at the API level. High-volume feeds (MSRC: 2975 entries, Black Hills: 909) will dominate the batch without this filter or a prior mass mark-as-read.
+
+**Miniflux auth**: `MinifluxClient` prefers `MINIFLUX_API_TOKEN` (header `X-Auth-Token`) over username/password. `setup_check.py` also respects this — it uses the token if configured.
+
+**`has_full_content(min_length)`**: method on `Article`, not a property. Accepts the same `min_length` passed to `extract_article_text()` so both checks use the same threshold from `config.MIN_CONTENT_LENGTH`.
 
 ## Configuration (`config.py`)
 
@@ -89,10 +97,21 @@ Before first use, set:
 - `MINIFLUX_URL` — IP/port of LXC 112 (or `localhost:8080` if running on LXC 112)
 - `MINIFLUX_PASSWORD` or `MINIFLUX_API_TOKEN`
 
-Key tunable values: `MAX_ARTICLES`, `PARALLEL_WORKERS`, `SUMMARY_CTX`, `REPORT_CTX`, `OLLAMA_TIMEOUT` (default 180 s; Stage 3 with thinking may need more).
+Key tunable values:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `MAX_ARTICLES` | 120 | Hard cap per run |
+| `PARALLEL_WORKERS` | 1 | Keep at 1 for CPU-only |
+| `SUMMARY_TIMEOUT` | 240 | Seconds; per-article Stage 2 |
+| `REPORT_TIMEOUT` | 900 | Seconds between stream chunks Stage 3 |
+| `REPORT_THINKING` | True | Set to False for faster testing |
+| `FEED_CATEGORIES` | None | List of category names to filter, or None for all |
 
 ## Cron (LXC 112)
 
 ```cron
 30 6 * * * root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py >> /var/log/threat-pipeline.log 2>&1
 ```
+
+With `think=True` on i7-10510U, Stage 3 takes 30–60 min for ~100 articles. The 06:30 cron leaves the report ready by ~08:00.
