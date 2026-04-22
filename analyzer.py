@@ -260,12 +260,13 @@ def generate_report(
 ) -> str:
     sorted_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
     prompt  = build_report_prompt(sorted_summaries, date_str, language)
+    # timeout aquí aplica entre chunks (no al total), lo que permite generaciones largas
     client  = ollama.Client(host=ollama_host, timeout=timeout)
     options = _build_options(num_ctx, num_predict=2000,
                              temperature=0.3, num_threads=num_threads)
 
     try:
-        response = client.chat(
+        stream = client.chat(
             model=model,
             messages=[
                 {"role": "system", "content": REPORT_SYSTEM_PROMPT},
@@ -273,8 +274,21 @@ def generate_report(
             ],
             think=thinking,
             options=options,
+            stream=True,
         )
-        return _strip_llm_output(response["message"]["content"])
+
+        tokens: list[str] = []
+        total = 0
+        for chunk in stream:
+            token = chunk["message"]["content"]
+            if token:
+                tokens.append(token)
+                total += 1
+                if total % 100 == 0:
+                    logger.info(f"  Generando informe... {total} tokens")
+
+        logger.info(f"  Informe generado: {total} tokens")
+        return _strip_llm_output("".join(tokens))
 
     except Exception as e:
         logger.error(f"Error generando informe: {e}")
