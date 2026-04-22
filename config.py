@@ -51,10 +51,10 @@ SUMMARY_THINKING = False
 REPORT_THINKING  = True
 
 # Workers paralelos para Etapa 2.
-# LXC tiene 4 cores, pero CPU inference es memory-bandwidth-bound.
-# Con qwen3.5:4b (~3.2GB) y 10GB disponibles, podemos hacer 2 en paralelo:
-# 2 × 3.2GB = 6.4GB — deja margen para KV cache y OS.
-PARALLEL_WORKERS = 2
+# Con CPU-only Ollama serializa las requests al mismo modelo aunque lleguen en paralelo.
+# PARALLEL_WORKERS=1 evita que el segundo worker agote su timeout esperando en cola.
+# Subir a 2 solo si el LXC puede procesar requests en paralelo (GPU o Ollama concurrente).
+PARALLEL_WORKERS = 1
 
 # Contexto por etapa (optimiza uso de RAM del KV cache)
 # Etapa 2: artículos de entrada son cortos, 2K tokens es suficiente
@@ -90,6 +90,12 @@ REPORT_LANGUAGE = "español"
 # ─────────────────────────────────────────────
 # TIMEOUTS Y REINTENTOS
 # ─────────────────────────────────────────────
-HTTP_TIMEOUT   = 15    # segundos para web scraping
-OLLAMA_TIMEOUT = 180   # segundos por llamada (qwen3.5:9b con thinking puede tardar más)
+HTTP_TIMEOUT    = 15   # segundos para web scraping
+
+# Etapa 2: qwen3.5:4b sin thinking — ~2 min por artículo en i7-10510U
+SUMMARY_TIMEOUT = 240
+
+# Etapa 3: qwen3.5:9b con thinking=True — puede tardar 10-15 min para ~100 artículos
+REPORT_TIMEOUT  = 900
+
 MAX_RETRIES    = 2     # reintentos si falla la extracción de contenido
