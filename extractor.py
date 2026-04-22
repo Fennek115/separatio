@@ -76,7 +76,7 @@ def extract_article_text(article, timeout: int = 15,
       3. Si todo falla → usar el título como fallback mínimo
     """
     # Paso 1: contenido del feed
-    if article.has_full_content:
+    if article.has_full_content(min_length):
         text = clean_html_content(article.content)
         if len(text) >= min_length:
             logger.debug(f"[feed] {article.title[:60]}")

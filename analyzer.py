@@ -1,14 +1,14 @@
 """
 analyzer.py — Etapas 2 y 3 del pipeline.
-  - Etapa 2: resumen estructurado de cada artículo (qwen3.5:4b, thinking=False)
-  - Etapa 3: informe consolidado de threat intelligence (qwen3.5:9b, thinking=True)
+  - Etapa 2: resumen estructurado de cada artículo (qwen3.5:4b, think=False)
+  - Etapa 3: informe consolidado de threat intelligence (qwen3.5:9b, think=True)
 """
 
 import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 import ollama
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,6 @@ class ArticleSummary:
     feed_category: str
     published_at: str
 
-    # Campos extraídos por el modelo
     threat_type: str = ""
     severity: str = ""
     severity_score: int = 0
@@ -40,6 +39,15 @@ class ArticleSummary:
     error: Optional[str] = None
 
 
+_SEVERITY_SCORE: dict[str, int] = {
+    "Crítica": 5, "Critical": 5,
+    "Alta": 4,    "High": 4,
+    "Media": 3,   "Medium": 3,
+    "Baja": 2,    "Low": 2,
+    "Informativa": 1, "Informational": 1,
+}
+
+
 # ─────────────────────────────────────────────────────────
 # PROMPTS
 # ─────────────────────────────────────────────────────────
@@ -47,6 +55,7 @@ class ArticleSummary:
 SUMMARY_SYSTEM_PROMPT = """Eres un analista de ciberseguridad experto.
 Analiza artículos de seguridad y extrae información estructurada en JSON.
 Responde ÚNICAMENTE con el objeto JSON, sin explicaciones ni markdown."""
+
 
 def build_summary_prompt(title: str, content: str,
                          feed: str, category: str) -> str:
@@ -73,6 +82,7 @@ REPORT_SYSTEM_PROMPT = """Eres un analista senior de Cyber Threat Intelligence.
 Redactas briefings ejecutivos de seguridad claros, precisos y accionables.
 Escribe en español profesional."""
 
+
 def build_report_prompt(summaries: list[ArticleSummary],
                         date_str: str, language: str = "español") -> str:
     items = []
@@ -88,6 +98,7 @@ def build_report_prompt(summaries: list[ArticleSummary],
             f"    Resumen: {s.summary}"
         )
 
+    unique_feeds = len(set(s.feed_title for s in summaries))
     return f"""Fecha del informe: {date_str}
 Total de artículos analizados: {len(summaries)}
 
@@ -121,140 +132,149 @@ Genera un INFORME DE INTELIGENCIA DE AMENAZAS completo en {language} con esta es
 (3-5 acciones concretas y priorizadas para equipos de seguridad basadas en las amenazas del día)
 
 ---
-*Fuentes: {len(summaries)} artículos de {len(set(s.feed_title for s in summaries))} feeds especializados*
+*Fuentes: {len(summaries)} artículos de {unique_feeds} feeds especializados*
 """
+
+
+# ─────────────────────────────────────────────────────────
+# HELPERS INTERNOS
+# ─────────────────────────────────────────────────────────
+
+def _strip_llm_output(text: str) -> str:
+    """Elimina bloques <think> y fences de markdown del output del modelo."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _build_options(num_ctx: int, num_predict: int,
+                   temperature: float, num_threads: int) -> dict:
+    options: dict = {
+        "temperature": temperature,
+        "num_predict": num_predict,
+        "num_ctx": num_ctx,
+    }
+    if num_threads > 0:
+        options["num_thread"] = num_threads
+    return options
 
 
 # ─────────────────────────────────────────────────────────
 # FUNCIONES PRINCIPALES
 # ─────────────────────────────────────────────────────────
 
-def summarize_article(article_id: int, title: str, content: str,
-                      feed_title: str, feed_category: str,
-                      url: str, published_at: str,
-                      model: str, ollama_host: str,
-                      timeout: int = 180,
-                      thinking: bool = False,
-                      num_ctx: int = 2048) -> ArticleSummary:
-    """
-    Etapa 2: extracción JSON con qwen3.5:4b.
-
-    thinking=False → responde directamente sin cadena de razonamiento.
-    Correcto para extracción JSON repetitiva: más rápido y output más limpio.
-    num_ctx=2048   → KV cache pequeño, ahorra RAM durante los resúmenes en paralelo.
-    """
+def summarize_article(
+    article_id: int, title: str, content: str,
+    feed_title: str, feed_category: str,
+    url: str, published_at: str,
+    model: str, ollama_host: str,
+    timeout: int = 180,
+    thinking: bool = False,
+    num_ctx: int = 2048,
+    num_threads: int = 0,
+    keep_alive: Optional[Union[float, str]] = None,
+    max_retries: int = 1,
+) -> ArticleSummary:
     summary = ArticleSummary(
-        article_id=article_id,
-        title=title,
-        url=url,
-        feed_title=feed_title,
-        feed_category=feed_category,
+        article_id=article_id, title=title, url=url,
+        feed_title=feed_title, feed_category=feed_category,
         published_at=published_at,
     )
-
     prompt = build_summary_prompt(title, content, feed_title, feed_category)
+    client = ollama.Client(host=ollama_host, timeout=timeout)
+    options = _build_options(num_ctx, num_predict=400,
+                             temperature=0.1, num_threads=num_threads)
 
-    try:
-        client = ollama.Client(host=ollama_host)
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                    {"role": "user",   "content": prompt},
+                ],
+                think=thinking,
+                keep_alive=keep_alive,
+                options=options,
+            )
+            raw  = _strip_llm_output(response["message"]["content"])
+            data = json.loads(raw)
 
-        options = {
-            "temperature": 0.1,
-            "num_predict": 400,
-            "num_ctx": num_ctx,
-        }
-        # qwen3.5 acepta el parámetro "think" para desactivar el modo razonamiento
-        if not thinking:
-            options["think"] = False
+            summary.threat_type      = data.get("threat_type", "Otro")
+            summary.severity         = data.get("severity", "Informativa")
+            summary.actors           = data.get("actors", [])
+            summary.cves             = data.get("cves", [])
+            summary.affected_systems = data.get("affected_systems", [])
+            summary.summary          = data.get("summary", "")
+            summary.iocs             = data.get("iocs", [])
+            summary.severity_score   = _SEVERITY_SCORE.get(summary.severity, 1)
+            return summary
 
-        response = client.chat(
-            model=model,
-            messages=[
-                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-                {"role": "user",   "content": prompt},
-            ],
-            options=options,
-        )
-        raw = response["message"]["content"].strip()
+        except json.JSONDecodeError as e:
+            if attempt < max_retries:
+                logger.warning(
+                    f"JSON inválido para '{title[:50]}', "
+                    f"reintentando ({attempt + 1}/{max_retries})"
+                )
+                continue
+            logger.warning(
+                f"JSON inválido para '{title[:50]}' "
+                f"tras {max_retries + 1} intentos: {e}"
+            )
+            summary.error = str(e)
 
-        # Limpiar bloques <think>...</think> por si el modelo los genera igual
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-        # Limpiar bloques markdown
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-
-        data = json.loads(raw)
-
-        summary.threat_type      = data.get("threat_type", "Otro")
-        summary.severity         = data.get("severity", "Informativa")
-        summary.actors           = data.get("actors", [])
-        summary.cves             = data.get("cves", [])
-        summary.affected_systems = data.get("affected_systems", [])
-        summary.summary          = data.get("summary", "")
-        summary.iocs             = data.get("iocs", [])
-
-        severity_map = {
-            "Crítica": 5, "Critical": 5,
-            "Alta": 4, "High": 4,
-            "Media": 3, "Medium": 3,
-            "Baja": 2, "Low": 2,
-            "Informativa": 1, "Informational": 1,
-        }
-        summary.severity_score = severity_map.get(summary.severity, 1)
-
-    except json.JSONDecodeError as e:
-        logger.warning(f"JSON inválido para '{title[:50]}': {e}")
-        summary.summary = f"Error de parsing: {raw[:200] if 'raw' in dir() else 'sin respuesta'}"
-        summary.error = str(e)
-    except Exception as e:
-        logger.error(f"Error al resumir '{title[:50]}': {e}")
-        summary.summary = title
-        summary.error = str(e)
+        except Exception as e:
+            logger.error(f"Error al resumir '{title[:50]}': {e}")
+            summary.summary = title
+            summary.error   = str(e)
+            return summary
 
     return summary
 
 
-def generate_report(summaries: list[ArticleSummary],
-                    date_str: str,
-                    model: str,
-                    ollama_host: str,
-                    language: str = "español",
-                    timeout: int = 300,
-                    thinking: bool = True,
-                    num_ctx: int = 16384) -> str:
-    """
-    Etapa 3: informe consolidado con qwen3.5:9b.
-
-    thinking=True  → el modelo razona internamente antes de redactar.
-    Produce informes más coherentes, mejor priorización y síntesis.
-    num_ctx=16384  → necesario para recibir todos los resúmenes del día.
-    """
-    sorted_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    prompt = build_report_prompt(sorted_summaries, date_str, language)
-
+def unload_model(model: str, ollama_host: str) -> None:
+    """Fuerza la descarga del modelo de RAM antes del swap a la siguiente etapa."""
     try:
         client = ollama.Client(host=ollama_host)
+        client.chat(
+            model=model,
+            messages=[{"role": "user", "content": " "}],
+            keep_alive=0,
+        )
+        logger.info(f"Modelo descargado de RAM: {model}")
+    except Exception as e:
+        logger.warning(f"No se pudo descargar el modelo '{model}': {e}")
 
-        options = {
-            "temperature": 0.3,
-            "num_predict": 2000,
-            "num_ctx": num_ctx,
-        }
-        if thinking:
-            options["think"] = True
 
+def generate_report(
+    summaries: list[ArticleSummary],
+    date_str: str,
+    model: str,
+    ollama_host: str,
+    language: str = "español",
+    timeout: int = 300,
+    thinking: bool = True,
+    num_ctx: int = 16384,
+    num_threads: int = 0,
+) -> str:
+    sorted_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
+    prompt  = build_report_prompt(sorted_summaries, date_str, language)
+    client  = ollama.Client(host=ollama_host, timeout=timeout)
+    options = _build_options(num_ctx, num_predict=2000,
+                             temperature=0.3, num_threads=num_threads)
+
+    try:
         response = client.chat(
             model=model,
             messages=[
                 {"role": "system", "content": REPORT_SYSTEM_PROMPT},
                 {"role": "user",   "content": prompt},
             ],
+            think=thinking,
             options=options,
         )
-
-        content = response["message"]["content"].strip()
-        # Eliminar bloques <think> del output final (son internos del modelo)
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-        return content
+        return _strip_llm_output(response["message"]["content"])
 
     except Exception as e:
         logger.error(f"Error generando informe: {e}")

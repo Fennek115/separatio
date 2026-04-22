@@ -125,9 +125,15 @@ def markdown_to_html_body(markdown_text: str) -> str:
     import re
     lines = markdown_text.split("\n")
     html_lines = []
-    in_list = False
+    list_tag: str | None = None   # "ul" | "ol" | None
     in_code_block = False
     in_table = False
+
+    def close_list() -> None:
+        nonlocal list_tag
+        if list_tag:
+            html_lines.append(f"</{list_tag}>")
+            list_tag = None
 
     for line in lines:
         # Bloques de código
@@ -136,9 +142,7 @@ def markdown_to_html_body(markdown_text: str) -> str:
                 html_lines.append("</code></pre>")
                 in_code_block = False
             else:
-                if in_list:
-                    html_lines.append("</ul>")
-                    in_list = False
+                close_list()
                 html_lines.append("<pre><code>")
                 in_code_block = True
             continue
@@ -153,13 +157,11 @@ def markdown_to_html_body(markdown_text: str) -> str:
             if not in_table:
                 html_lines.append("<table>")
                 in_table = True
-                row_html = "<tr>" + "".join(f"<th>{c}</th>" for c in cells) + "</tr>"
-                html_lines.append(row_html)
+                html_lines.append("<tr>" + "".join(f"<th>{c}</th>" for c in cells) + "</tr>")
             elif all(re.match(r"[-:]+", c) for c in cells):
-                pass   # separador de tabla
+                pass
             else:
-                row_html = "<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
-                html_lines.append(row_html)
+                html_lines.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
             continue
         elif in_table:
             html_lines.append("</table>")
@@ -167,60 +169,51 @@ def markdown_to_html_body(markdown_text: str) -> str:
 
         # Separadores
         if re.match(r"^---+$", line.strip()):
-            if in_list:
-                html_lines.append("</ul>")
-                in_list = False
+            close_list()
             html_lines.append("<hr>")
             continue
 
         # Encabezados
         hm = re.match(r"^(#{1,4})\s+(.*)", line)
         if hm:
-            if in_list:
-                html_lines.append("</ul>")
-                in_list = False
+            close_list()
             level = len(hm.group(1))
-            content = _inline(hm.group(2))
-            html_lines.append(f"<h{level}>{content}</h{level}>")
+            html_lines.append(f"<h{level}>{_inline(hm.group(2))}</h{level}>")
             continue
 
-        # Listas
+        # Listas no ordenadas
         if re.match(r"^[\*\-]\s+", line):
-            if not in_list:
+            if list_tag != "ul":
+                close_list()
                 html_lines.append("<ul>")
-                in_list = True
-            content = _inline(re.sub(r"^[\*\-]\s+", "", line))
-            html_lines.append(f"<li>{content}</li>")
+                list_tag = "ul"
+            html_lines.append(f"<li>{_inline(re.sub(r'^[*-]\\s+', '', line))}</li>")
             continue
 
+        # Listas ordenadas
         if re.match(r"^\d+\.\s+", line):
-            if not in_list:
+            if list_tag != "ol":
+                close_list()
                 html_lines.append("<ol>")
-                in_list = True
-            content = _inline(re.sub(r"^\d+\.\s+", "", line))
-            html_lines.append(f"<li>{content}</li>")
+                list_tag = "ol"
+            html_lines.append(f"<li>{_inline(re.sub(r'^\\d+\\.\\s+', '', line))}</li>")
             continue
 
-        if in_list and not line.strip():
-            html_lines.append("</ul>")
-            in_list = False
-
-        # Línea vacía
+        # Línea vacía cierra lista abierta
         if not line.strip():
+            close_list()
             html_lines.append("")
             continue
 
         # Blockquote
         if line.startswith(">"):
-            content = _inline(line.lstrip("> "))
-            html_lines.append(f"<blockquote><p>{content}</p></blockquote>")
+            html_lines.append(f"<blockquote><p>{_inline(line.lstrip('> '))}</p></blockquote>")
             continue
 
         # Párrafo normal
         html_lines.append(f"<p>{_inline(line)}</p>")
 
-    if in_list:
-        html_lines.append("</ul>")
+    close_list()
     if in_table:
         html_lines.append("</table>")
 

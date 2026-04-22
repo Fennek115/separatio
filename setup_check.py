@@ -41,12 +41,14 @@ def main():
     print("\n  — Miniflux —")
     try:
         import requests, config
+        api_token = getattr(config, "MINIFLUX_API_TOKEN", None)
+        headers   = {"X-Auth-Token": api_token} if api_token else {}
+        auth      = None if api_token else (config.MINIFLUX_USERNAME, config.MINIFLUX_PASSWORD)
         r = requests.get(
             f"{config.MINIFLUX_URL}/v1/me",
-            auth=(config.MINIFLUX_USERNAME, config.MINIFLUX_PASSWORD),
-            timeout=5,
+            headers=headers, auth=auth, timeout=5,
         )
-        ok = r.status_code == 200
+        ok   = r.status_code == 200
         user = r.json().get("username", "?") if ok else ""
         all_ok &= check("Conexión Miniflux API", ok,
                         f"usuario: {user}" if ok else f"HTTP {r.status_code}")

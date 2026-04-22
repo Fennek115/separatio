@@ -22,10 +22,8 @@ class Article:
     content: str          # HTML/texto que viene en el feed (puede estar vacío)
     published_at: str
 
-    @property
-    def has_full_content(self) -> bool:
-        """True si el feed entrega contenido suficiente (no solo título)."""
-        return len(self.content.strip()) > 300
+    def has_full_content(self, min_length: int = 300) -> bool:
+        return len(self.content.strip()) >= min_length
 
 
 class MinifluxClient:
