@@ -84,7 +84,8 @@ Escribe en español profesional."""
 
 
 def build_report_prompt(summaries: list[ArticleSummary],
-                        date_str: str, language: str = "español") -> str:
+                        date_str: str, language: str = "español",
+                        correlation=None) -> str:
     items = []
     for i, s in enumerate(summaries, 1):
         cves_str     = ", ".join(s.cves) if s.cves else "ninguno"
@@ -99,37 +100,61 @@ def build_report_prompt(summaries: list[ArticleSummary],
         )
 
     unique_feeds = len(set(s.feed_title for s in summaries))
+
+    correlation_block = ""
+    if correlation is not None and correlation.has_signals():
+        correlation_block = f"\n{correlation.format_for_prompt()}\n"
+
     return f"""Fecha del informe: {date_str}
 Total de artículos analizados: {len(summaries)}
-
+{correlation_block}
 ARTÍCULOS ANALIZADOS:
 {chr(10).join(items)}
 
 ---
-Genera un INFORME DE INTELIGENCIA DE AMENAZAS completo en {language} con esta estructura exacta:
+Genera DOS informes separados en {language}. Usa EXACTAMENTE estos marcadores de sección:
 
-# 🛡️ Threat Intelligence Briefing — {date_str}
+===VULNERABILITY_BRIEFING===
+
+# 🔒 Vulnerability Briefing — {date_str}
+
+## Resumen de Vulnerabilidades
+(2 párrafos: CVEs del día, nivel de riesgo, urgencia de parcheo)
+
+## ⚠️ CVEs Críticos y Altos
+(Tabla: Sistema Afectado | CVE | Severidad | Explotabilidad | Acción — solo CVEs reales mencionados en los artículos)
+
+## 🔑 Parches Prioritarios
+(Lista de acciones de remediación ordenadas por urgencia)
+
+===THREAT_INTEL_DIGEST===
+
+# 🕵️ Threat Intelligence Digest — {date_str}
 
 ## Resumen Ejecutivo
-(2-3 párrafos: panorama general del día, tendencias principales, nivel de alerta global)
+(2-3 párrafos: panorama del día, tendencias, nivel de alerta global)
 
 ## 🔴 Amenazas Críticas y Altas
-(Lista detallada de los ítems con severidad Crítica o Alta, agrupados por tipo)
+(Lista detallada de ítems con severidad Crítica o Alta, agrupados por tipo)
 
-## 🟡 Vulnerabilidades Destacadas
-(CVEs relevantes con sistema afectado, CVSS si se mencionó, y acción recomendada)
-
-## 🕵️ Actividad de Actores de Amenaza
-(Grupos APT, cibercriminales o hacktivistas con actividad reportada hoy)
+## 👤 Actividad de Actores de Amenaza
+(Grupos APT, cibercriminales o hacktivistas con actividad reportada — solo los mencionados explícitamente)
 
 ## 🌎 Contexto Regional LATAM
-(Mencionar específicamente cualquier amenaza o incidente que afecte a América Latina)
+(Amenazas o incidentes con impacto en América Latina. Si no hay, indicarlo brevemente.)
 
 ## 📋 Resumen por Categoría
-(Tabla o lista: cuántos ítems por categoría — Ransomware, APT, CVEs, Phishing, etc.)
+(Tabla: Categoría | Cantidad | Severidad Máxima)
 
 ## ✅ Acciones Recomendadas
-(3-5 acciones concretas y priorizadas para equipos de seguridad basadas en las amenazas del día)
+(3-5 acciones concretas y priorizadas para equipos de seguridad)
+
+===END===
+
+REGLAS:
+- No inventes CVEs ni actores que no aparezcan en los artículos analizados.
+- Si las correlaciones verificadas incluyen CVEs marcados como KEV o corroborados, menciónalos en el Vulnerability Briefing como hechos confirmados.
+- Mantén los marcadores ===VULNERABILITY_BRIEFING===, ===THREAT_INTEL_DIGEST=== y ===END=== exactamente como están.
 
 ---
 *Fuentes: {len(summaries)} artículos de {unique_feeds} feeds especializados*
@@ -257,12 +282,14 @@ def generate_report(
     thinking: bool = True,
     num_ctx: int = 16384,
     num_threads: int = 0,
+    correlation=None,
+    max_tokens: int = 3500,
 ) -> str:
     sorted_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    prompt  = build_report_prompt(sorted_summaries, date_str, language)
+    prompt  = build_report_prompt(sorted_summaries, date_str, language, correlation)
     # timeout aquí aplica entre chunks (no al total), lo que permite generaciones largas
     client  = ollama.Client(host=ollama_host, timeout=timeout)
-    options = _build_options(num_ctx, num_predict=2000,
+    options = _build_options(num_ctx, num_predict=max_tokens,
                              temperature=0.3, num_threads=num_threads)
 
     try:

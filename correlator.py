@@ -1,0 +1,194 @@
+"""
+correlator.py — Stage 2.5: correlación entre fuentes sin inferencia LLM.
+
+Cruza CVEs, actores y feeds para detectar hechos verificables:
+  - CVEs mencionados en ≥2 fuentes independientes (corroborados)
+  - CVEs en el catálogo KEV de CISA (explotados activamente en producción)
+  - CVEs con PoC/exploit público confirmado (Exploit-DB, Sploitus, ZDI)
+  - Actores de amenaza con actividad reportada en ≥2 fuentes
+
+La correlación es determinista: coincidencia exacta de IDs, sin inferencia.
+"""
+
+import logging
+import re
+import requests
+from collections import defaultdict
+from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
+
+# Feeds que señalan existencia de exploit/PoC — no contenido narrativo
+_EXPLOIT_SIGNAL_FEEDS = frozenset({
+    "Exploit-DB",
+    "Sploitus",
+    "Zero Day Initiative (ZDI) — Published",
+})
+
+# Valores de actor que indican "desconocido" — excluir de trending
+_UNKNOWN_ACTORS = frozenset({
+    "unknown", "desconocido", "no identificado", "n/a", "none",
+    "sin identificar", "no aplica", "no identificados",
+})
+
+
+@dataclass
+class CorrelationContext:
+    """Correlaciones calculadas por código — hechos, no inferencias del LLM."""
+
+    # CVE -> feeds donde se mencionó (solo CVEs con ≥2 fuentes distintas)
+    corroborated_cves: dict[str, list[str]] = field(default_factory=dict)
+    # CVEs presentes en el catálogo KEV de CISA
+    kev_active_cves: list[str] = field(default_factory=list)
+    # CVEs con PoC/exploit en feeds de señal
+    poc_available_cves: list[str] = field(default_factory=list)
+    # Actor -> feeds donde se mencionó (solo actores en ≥2 fuentes distintas)
+    trending_actors: dict[str, list[str]] = field(default_factory=dict)
+    # Todos los CVEs del día y sus fuentes (para la tabla de vulnerabilidades)
+    all_cve_sources: dict[str, list[str]] = field(default_factory=dict)
+
+    kev_fetch_ok: bool = False
+    total_articles: int = 0
+
+    def has_signals(self) -> bool:
+        return bool(
+            self.corroborated_cves or self.kev_active_cves
+            or self.poc_available_cves or self.trending_actors
+        )
+
+    def format_for_prompt(self) -> str:
+        """Devuelve el bloque de texto para inyectar en el prompt de Stage 3."""
+        if not self.has_signals():
+            return ""
+
+        lines = [
+            "CORRELACIONES VERIFICADAS",
+            "(calculadas por coincidencia exacta de IDs entre fuentes — no son inferencias):",
+            "",
+        ]
+
+        if self.kev_active_cves:
+            lines.append(
+                "  ★ EXPLOTADOS ACTIVAMENTE — CISA KEV: "
+                + ", ".join(self.kev_active_cves)
+            )
+        if self.corroborated_cves:
+            lines.append("  ✓ CORROBORADOS en ≥2 fuentes independientes:")
+            for cve, feeds in list(self.corroborated_cves.items())[:20]:
+                lines.append(f"      {cve} → {' | '.join(feeds[:4])}")
+        if self.poc_available_cves:
+            lines.append(
+                "  ⚡ PoC/EXPLOIT PÚBLICO CONFIRMADO: "
+                + ", ".join(self.poc_available_cves[:20])
+            )
+        if self.trending_actors:
+            lines.append("  👁 ACTORES EN TENDENCIA (≥2 fuentes):")
+            for actor, feeds in list(self.trending_actors.items())[:10]:
+                lines.append(f"      {actor} → {' | '.join(feeds[:4])}")
+
+        lines += [
+            "",
+            "REGLA: Usa estas correlaciones como hechos verificados en el informe.",
+            "NO inferir ni especular conexiones adicionales no listadas aquí.",
+        ]
+        return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────
+
+def _normalize_cve(raw: str) -> str:
+    return raw.upper().strip()
+
+
+def _is_valid_cve(cve: str) -> bool:
+    return bool(re.match(r"^CVE-\d{4}-\d{4,}$", cve))
+
+
+def _dedup(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+# ─────────────────────────────────────────────────────────
+# FUNCIÓN PRINCIPAL
+# ─────────────────────────────────────────────────────────
+
+def build_correlation_context(
+    summaries: list,
+    kev_url: str = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    kev_timeout: int = 15,
+) -> CorrelationContext:
+    """
+    Construye el contexto de correlación a partir de los ArticleSummary de Stage 2.
+    No invoca ningún LLM — toda la lógica es determinista.
+    """
+    ctx = CorrelationContext(total_articles=len(summaries))
+
+    cve_map: dict[str, list[str]] = defaultdict(list)
+    actor_map: dict[str, list[str]] = defaultdict(list)
+    exploit_cves: set[str] = set()
+
+    for s in summaries:
+        is_exploit_feed = s.feed_title in _EXPLOIT_SIGNAL_FEEDS
+
+        for raw in s.cves:
+            cve = _normalize_cve(raw)
+            if not _is_valid_cve(cve):
+                continue
+            cve_map[cve].append(s.feed_title)
+            if is_exploit_feed:
+                exploit_cves.add(cve)
+
+        for actor in s.actors:
+            actor = actor.strip()
+            if actor and actor.lower() not in _UNKNOWN_ACTORS:
+                actor_map[actor].append(s.feed_title)
+
+    ctx.all_cve_sources = {cve: _dedup(feeds) for cve, feeds in cve_map.items()}
+
+    ctx.corroborated_cves = {
+        cve: _dedup(feeds)
+        for cve, feeds in cve_map.items()
+        if len(set(feeds)) >= 2
+    }
+
+    ctx.poc_available_cves = sorted(exploit_cves)
+
+    ctx.trending_actors = {
+        actor: _dedup(feeds)
+        for actor, feeds in actor_map.items()
+        if len(set(feeds)) >= 2
+    }
+
+    # ── CISA KEV lookup ──────────────────────────────────
+    logger.info("  Consultando CISA KEV...")
+    try:
+        resp = requests.get(kev_url, timeout=kev_timeout)
+        resp.raise_for_status()
+        kev_ids = {
+            v["cveID"].upper()
+            for v in resp.json().get("vulnerabilities", [])
+        }
+        ctx.kev_active_cves = sorted(cve for cve in cve_map if cve in kev_ids)
+        ctx.kev_fetch_ok = True
+        logger.info(
+            f"  KEV: {len(kev_ids)} entradas — "
+            f"{len(ctx.kev_active_cves)} coincidencias con los CVEs del día"
+        )
+    except Exception as e:
+        logger.warning(f"  CISA KEV no disponible: {e}")
+
+    logger.info(
+        f"  Correlaciones: {len(cve_map)} CVEs únicos | "
+        f"{len(ctx.corroborated_cves)} corroborados | "
+        f"{len(ctx.poc_available_cves)} con PoC | "
+        f"{len(ctx.trending_actors)} actores en tendencia"
+    )
+    return ctx

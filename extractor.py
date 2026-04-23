@@ -6,11 +6,19 @@ Usa trafilatura como motor principal con fallback a BeautifulSoup.
 import logging
 import re
 import time
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 import trafilatura
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+def _domain(url: str) -> str:
+    try:
+        return urlparse(url).netloc.lower().removeprefix("www.")
+    except Exception:
+        return ""
 
 
 def clean_html_content(html: str) -> str:
@@ -30,12 +38,16 @@ def clean_html_content(html: str) -> str:
     return "\n".join(lines)
 
 
-def fetch_url_content(url: str, timeout: int = 15) -> str:
+def fetch_url_content(url: str, timeout: int = 15,
+                      blocked_domains: set | None = None) -> str:
     """
     Descarga una URL y extrae el contenido principal con trafilatura.
-    Retorna texto limpio o cadena vacía si falla.
+    Retorna texto limpio o cadena vacía si falla o el dominio está bloqueado.
     """
     if not url:
+        return ""
+    if blocked_domains and _domain(url) in blocked_domains:
+        logger.debug(f"[skip-blocked] {_domain(url)}")
         return ""
     try:
         # trafilatura puede hacer el fetch internamente
@@ -68,11 +80,12 @@ def fetch_url_content(url: str, timeout: int = 15) -> str:
 
 
 def extract_article_text(article, timeout: int = 15,
-                          min_length: int = 200) -> str:
+                          min_length: int = 200,
+                          blocked_domains: set | None = None) -> str:
     """
     Estrategia de extracción en 3 pasos:
       1. Usar contenido del feed si es suficientemente completo
-      2. Si no → hacer fetch de la URL
+      2. Si no → hacer fetch de la URL (salvo dominio bloqueado)
       3. Si todo falla → usar el título como fallback mínimo
     """
     # Paso 1: contenido del feed
@@ -85,7 +98,8 @@ def extract_article_text(article, timeout: int = 15,
     # Paso 2: scraping de la URL
     logger.debug(f"[fetch] {article.url[:80]}")
     time.sleep(0.5)   # pequeña pausa para no sobrecargar servidores
-    fetched = fetch_url_content(article.url, timeout=timeout)
+    fetched = fetch_url_content(article.url, timeout=timeout,
+                                blocked_domains=blocked_domains)
     if len(fetched) >= min_length:
         return fetched
 

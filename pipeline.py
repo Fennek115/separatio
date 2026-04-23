@@ -22,6 +22,7 @@ import config
 from miniflux_client import MinifluxClient
 from extractor import extract_article_text, truncate_text
 from analyzer import ArticleSummary, summarize_article, generate_report, unload_model
+from correlator import build_correlation_context, CorrelationContext
 from reporter import save_report
 
 logging.basicConfig(
@@ -105,6 +106,7 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
             article,
             timeout=config.HTTP_TIMEOUT,
             min_length=config.MIN_CONTENT_LENGTH,
+            blocked_domains=config.NO_SCRAPE_DOMAINS,
         )
         text = truncate_text(text, max_tokens_approx=800)
         processed.append({
@@ -199,18 +201,40 @@ def stage2_summarize(articles: list[dict], dry_run: bool = False) -> list[Articl
 
 
 # ─────────────────────────────────────────────
+# ETAPA 2.5: CORRELACIONES
+# ─────────────────────────────────────────────
+
+def stage25_correlate(summaries: list[ArticleSummary]) -> CorrelationContext:
+    logger.info("═" * 50)
+    logger.info("ETAPA 2.5: Correlacionando CVEs, actores y KEV")
+    logger.info("═" * 50)
+    return build_correlation_context(
+        summaries=summaries,
+        kev_url=config.CISA_KEV_URL,
+        kev_timeout=config.KEV_FETCH_TIMEOUT,
+    )
+
+
+# ─────────────────────────────────────────────
 # ETAPA 3: INFORME
 # ─────────────────────────────────────────────
 
 def stage3_report(summaries: list[ArticleSummary],
                   date_str: str,
+                  correlation: CorrelationContext | None = None,
                   dry_run: bool = False) -> dict[str, str]:
     logger.info("═" * 50)
     logger.info(f"ETAPA 3: Generando informe con {config.REPORT_MODEL}")
     logger.info("═" * 50)
 
     if dry_run:
-        markdown = f"# 🛡️ Threat Intelligence Briefing — {date_str}\n\n[DRY RUN]\n"
+        markdown = (
+            "===VULNERABILITY_BRIEFING===\n"
+            f"# 🔒 Vulnerability Briefing — {date_str}\n\n[DRY RUN]\n\n"
+            "===THREAT_INTEL_DIGEST===\n"
+            f"# 🕵️ Threat Intelligence Digest — {date_str}\n\n[DRY RUN]\n\n"
+            "===END==="
+        )
     else:
         logger.info(f"  Enviando {len(summaries)} resúmenes al modelo...")
         markdown = generate_report(
@@ -223,6 +247,8 @@ def stage3_report(summaries: list[ArticleSummary],
             thinking=config.REPORT_THINKING,
             num_ctx=config.REPORT_CTX,
             num_threads=config.OLLAMA_NUM_THREADS,
+            correlation=correlation,
+            max_tokens=config.REPORT_MAX_TOKENS,
         )
 
     total_feeds = len(set(s.feed_title for s in summaries))
@@ -233,6 +259,7 @@ def stage3_report(summaries: list[ArticleSummary],
         total_articles=len(summaries),
         total_feeds=total_feeds,
         fmt=config.OUTPUT_FORMAT,
+        split=config.SPLIT_REPORTS,
     )
 
 
@@ -263,8 +290,9 @@ def main():
 
     if args.report_only:
         logger.info("Modo --report-only: cargando resúmenes desde caché...")
-        summaries = load_summaries_cache(date_str)
-        paths = stage3_report(summaries, date_str, dry_run=args.dry_run)
+        summaries    = load_summaries_cache(date_str)
+        correlation  = stage25_correlate(summaries)
+        paths        = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
         _print_result(paths)
         return
 
@@ -294,7 +322,8 @@ def main():
     if not args.dry_run:
         unload_model(config.SUMMARY_MODEL, config.OLLAMA_HOST)
 
-    paths = stage3_report(summaries, date_str, dry_run=args.dry_run)
+    correlation = stage25_correlate(summaries)
+    paths       = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
     _print_result(paths)
 
 

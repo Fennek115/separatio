@@ -1,0 +1,337 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+    <head>
+        <title>Threat Analysis - AI Pipeline</title>
+        <dateCreated>Tue, 21 Apr 2026 00:00:00 -0300</dateCreated>
+        <dateModified>Tue, 22 Apr 2026 00:00:00 -0300</dateModified>
+    </head>
+    <body>
+
+        <!-- ════════════════════════════════════════════
+             CIBERSECURITY — Noticias generales de alto valor
+             ════════════════════════════════════════════ -->
+        <outline text="Cibersecurity">
+            <outline title="BleepingComputer" text="BleepingComputer"
+                xmlUrl="https://www.bleepingcomputer.com/feed/"
+                htmlUrl="https://www.bleepingcomputer.com" type="rss"
+                description="Full content. Cobertura rápida y técnica de incidentes, malware y vulnerabilidades." />
+
+            <outline title="Krebs on Security" text="Krebs on Security"
+                xmlUrl="https://krebsonsecurity.com/feed/"
+                htmlUrl="https://krebsonsecurity.com" type="rss"
+                description="Full content. Investigación periodística profunda sobre cibercrimen." />
+
+            <outline title="The Hacker News" text="The Hacker News"
+                xmlUrl="https://feeds.feedburner.com/TheHackersNews"
+                htmlUrl="https://thehackernews.com" type="rss"
+                description="Full content. Noticias técnicas diarias, CVEs y campañas activas." />
+
+            <outline title="The Record by Recorded Future" text="The Record by Recorded Future"
+                xmlUrl="https://therecord.media/feed"
+                htmlUrl="https://therecord.media" type="rss"
+                description="Full content. Periodismo de threat intel con contexto geopolítico." />
+
+            <outline title="SecurityWeek" text="SecurityWeek"
+                xmlUrl="https://www.securityweek.com/feed/"
+                htmlUrl="https://www.securityweek.com" type="rss"
+                description="Truncado — requiere fetch. Amplia cobertura de industria y vulnerabilidades." />
+
+            <outline title="Dark Reading" text="Dark Reading"
+                xmlUrl="https://www.darkreading.com/rss.xml"
+                htmlUrl="https://www.darkreading.com" type="rss"
+                description="Truncado — requiere fetch. Análisis de tendencias y ataques." />
+
+            <outline title="Cybersecurity News" text="Cybersecurity News"
+                xmlUrl="https://cybersecuritynews.com/feed/"
+                htmlUrl="https://cybersecuritynews.com" type="rss"
+                description="Full content. Noticias técnicas con buen detalle de PoC y exploits." />
+
+            <outline title="Security Affairs" text="Security Affairs"
+                xmlUrl="https://securityaffairs.com/feed"
+                htmlUrl="https://securityaffairs.com" type="rss"
+                description="Full content. Feed principal unificado (reemplaza las 7 categorías individuales)." />
+
+            <outline title="Graham Cluley" text="Graham Cluley"
+                xmlUrl="https://grahamcluley.com/feed/"
+                htmlUrl="https://grahamcluley.com" type="rss"
+                description="Full content. Análisis accesible de incidentes y cibercrimen." />
+
+            <outline title="Schneier on Security" text="Schneier on Security"
+                xmlUrl="https://www.schneier.com/feed/atom/"
+                htmlUrl="https://www.schneier.com" type="rss"
+                description="Full content. Análisis de política, criptografía y tendencias estratégicas." />
+
+            <outline title="Infosecurity Magazine" text="Infosecurity Magazine"
+                xmlUrl="https://www.infosecurity-magazine.com/rss/news/"
+                htmlUrl="https://www.infosecurity-magazine.com" type="rss"
+                description="Truncado — requiere fetch. Cobertura amplia de industria." />
+        </outline>
+
+        <!-- ════════════════════════════════════════════
+             HACKING & RESEARCH — Técnicas ofensivas y research
+             ════════════════════════════════════════════ -->
+        <outline text="Hacking &amp; Research">
+            <outline title="Google Project Zero" text="Google Project Zero"
+                xmlUrl="https://googleprojectzero.blogspot.com/feeds/posts/default"
+                htmlUrl="https://googleprojectzero.blogspot.com" type="rss"
+                description="Full content. Investigación de vulnerabilidades de primer nivel." />
+
+            <outline title="WatchTowr Labs" text="WatchTowr Labs"
+                xmlUrl="https://labs.watchtowr.com/rss/"
+                htmlUrl="https://labs.watchtowr.com" type="rss"
+                description="Full content. Research ofensivo de alta calidad técnica." />
+
+            <outline title="PortSwigger Web Security Blog" text="PortSwigger Web Security Blog"
+                xmlUrl="https://portswigger.net/blog/rss"
+                htmlUrl="https://portswigger.net/blog" type="rss"
+                description="Full content. Investigación web security, web cache attacks, etc." />
+
+            <outline title="Outflank Research" text="Outflank Research"
+                xmlUrl="https://outflank.nl/blog/feed/"
+                htmlUrl="https://outflank.nl/blog" type="rss"
+                description="Full content. Red team, evasión de defensas y técnicas avanzadas." />
+
+            <outline title="Black Hills InfoSec" text="Black Hills InfoSec"
+                xmlUrl="https://www.blackhillsinfosec.com/feed/"
+                htmlUrl="https://www.blackhillsinfosec.com" type="rss"
+                description="Full content. Red team, pentesting y defensa activa." />
+
+            <outline title="Exploit-DB" text="Exploit-DB"
+                xmlUrl="https://www.exploit-db.com/rss.xml"
+                htmlUrl="https://www.exploit-db.com" type="rss"
+                description="Solo títulos/metadatos — NO scrapear. PoC públicos: usar solo como señal de correlación CVE." />
+
+            <outline title="Sploitus" text="Sploitus - Exploit Aggregator"
+                xmlUrl="https://sploitus.com/rss"
+                htmlUrl="https://sploitus.com" type="rss"
+                description="Solo títulos — NO scrapear. Agrega exploits de múltiples fuentes, usar como señal de correlación." />
+
+            <outline title="Huntress Blog" text="Huntress Blog"
+                xmlUrl="https://www.huntress.com/blog/rss.xml"
+                htmlUrl="https://www.huntress.com/blog" type="rss"
+                description="Full content. Análisis de malware y TTPs observadas en entornos reales." />
+        </outline>
+
+        <!-- ════════════════════════════════════════════
+             THREAT INTEL — Inteligencia de amenazas
+             ════════════════════════════════════════════ -->
+        <outline text="Threat Intel">
+            <outline title="Cisco Talos Intelligence" text="Cisco Talos Intelligence"
+                xmlUrl="https://feeds.feedburner.com/feedburner/Talos"
+                htmlUrl="https://blog.talosintelligence.com" type="rss"
+                description="Full content. Uno de los mejores equipos de threat intel del mundo." />
+
+            <outline title="Mandiant Blog" text="Mandiant Blog"
+                xmlUrl="https://www.mandiant.com/resources/blog/rss.xml"
+                htmlUrl="https://www.mandiant.com" type="rss"
+                description="Full content. APT tracking, incident response y attribution." />
+
+            <outline title="Palo Alto Unit 42" text="Palo Alto Unit 42"
+                xmlUrl="https://unit42.paloaltonetworks.com/feed/"
+                htmlUrl="https://unit42.paloaltonetworks.com" type="rss"
+                description="Full content. Análisis técnico profundo de amenazas y campañas." />
+
+            <outline title="Kaspersky Securelist" text="Kaspersky Securelist"
+                xmlUrl="https://securelist.com/feed/"
+                htmlUrl="https://securelist.com" type="rss"
+                description="Full content. Investigación técnica de malware y APTs." />
+
+            <outline title="Microsoft Security Blog" text="Microsoft Security Blog"
+                xmlUrl="https://www.microsoft.com/en-us/security/blog/feed/"
+                htmlUrl="https://www.microsoft.com/en-us/security/blog" type="rss"
+                description="Full content. MSTIC threat intel, Defender y noticias de seguridad MS." />
+
+            <outline title="SentinelOne Blog" text="SentinelOne Blog"
+                xmlUrl="https://www.sentinelone.com/blog/feed/"
+                htmlUrl="https://www.sentinelone.com/blog" type="rss"
+                description="Full content. Research técnico de malware y amenazas avanzadas." />
+
+            <outline title="The DFIR Report" text="The DFIR Report"
+                xmlUrl="https://thedfirreport.com/feed/"
+                htmlUrl="https://thedfirreport.com" type="rss"
+                description="Full content. Reportes forenses detallados de intrusiones reales." />
+
+            <outline title="Malwarebytes Labs" text="Malwarebytes Labs"
+                xmlUrl="https://blog.malwarebytes.com/feed/"
+                htmlUrl="https://blog.malwarebytes.com" type="rss"
+                description="Full content. Análisis de malware y amenazas consumer/SMB." />
+
+            <outline title="Recorded Future Blog" text="Recorded Future Blog"
+                xmlUrl="https://www.recordedfuture.com/feed"
+                htmlUrl="https://www.recordedfuture.com/blog" type="rss"
+                description="Full content. Threat intel estratégica con contexto geopolítico." />
+
+            <outline title="Wiz Research Blog" text="Wiz Research Blog"
+                xmlUrl="https://www.wiz.io/blog/rss"
+                htmlUrl="https://www.wiz.io/blog" type="rss"
+                description="Full content. Cloud security research, misconfigs críticas y CVEs cloud." />
+
+            <outline title="Sophos News" text="Sophos News"
+                xmlUrl="https://www.sophos.com/es-es/blog/feed?id=blt6f15f4f7deaf4242"
+                htmlUrl="https://news.sophos.com" type="rss"
+                description="Full content. Análisis técnico de ransomware y amenazas activas. Incluye contenido ex-Secureworks CTU." />
+
+            <outline title="tl;dr sec Newsletter" text="tl;dr sec Newsletter"
+                xmlUrl="https://tldrsec.com/feed.xml"
+                htmlUrl="https://tldrsec.com" type="rss"
+                description="Full content. Digest semanal curado — excelente señal/ruido." />
+
+            <outline title="SANS Internet Storm Center" text="SANS Internet Storm Center"
+                xmlUrl="https://isc.sans.edu/rssfeed_full.xml"
+                htmlUrl="https://isc.sans.edu" type="rss"
+                description="Full content (feed_full). Diarios técnicos y alertas de internet." />
+
+            <!-- ── Nuevas fuentes agregadas 2026-04-22 ── -->
+
+            <outline title="Google TAG (Threat Analysis Group)" text="Google TAG"
+                xmlUrl="https://blog.google/threat-analysis-group/rss/"
+                htmlUrl="https://blog.google/threat-analysis-group/" type="rss"
+                description="Full content. Seguimiento de actores respaldados por estados (APTs gubernamentales, spyware). Perspectiva única de Google." />
+
+            <outline title="CrowdStrike Blog" text="CrowdStrike Blog"
+                xmlUrl="https://www.crowdstrike.com/blog/feed/"
+                htmlUrl="https://www.crowdstrike.com/en-us/blog/" type="rss"
+                description="Full content. Tracking de adversarios nombrados (BEAR/PANDA/SPIDER). Global Threat Report, inteligencia de primera línea." />
+
+            <outline title="Elastic Security Labs" text="Elastic Security Labs"
+                xmlUrl="https://www.elastic.co/security-labs/rss/feed.xml"
+                htmlUrl="https://www.elastic.co/security-labs" type="rss"
+                description="Full content. Análisis de malware con YARA, detecciones conductuales. 40+ investigadores, alto rigor técnico." />
+
+            <outline title="Proofpoint Threat Insight" text="Proofpoint Threat Insight"
+                xmlUrl="https://www.proofpoint.com/us/rss.xml"
+                htmlUrl="https://www.proofpoint.com/us/blog/threat-insight" type="rss"
+                description="Full content. Amenazas por email, actores TA-numerados (TA505, TA577). Phishing, BEC y malware distribuido por correo." />
+
+            <outline title="Check Point Research" text="Check Point Research"
+                xmlUrl="https://research.checkpoint.com/feed"
+                htmlUrl="https://research.checkpoint.com" type="rss"
+                description="Full content. Análisis de malware, campañas APT y amenazas móviles. Cobertura global con foco en geopolítica." />
+
+            <outline title="FortiGuard Labs Threat Research" text="FortiGuard Labs"
+                xmlUrl="http://feeds.feedburner.com/fortinet/blog/threat-research"
+                htmlUrl="https://www.fortinet.com/blog/threat-research" type="rss"
+                description="Full content. Threat research respaldado por telemetría masiva de sensores. Ransomware, campañas activas y TTPs." />
+        </outline>
+
+        <!-- ════════════════════════════════════════════
+             VULNERABILITY — CVEs, advisories y boletines
+             ════════════════════════════════════════════ -->
+        <outline text="Vulnerability">
+            <outline title="CISA Advisories" text="CISA Advisories"
+                xmlUrl="https://www.cisa.gov/cybersecurity-advisories/all.xml"
+                htmlUrl="https://www.cisa.gov" type="rss"
+                description="Oficial US-CERT. KEV, ICS advisories y alertas gubernamentales. Incluye vulnerabilidades explotadas activamente." />
+
+            <outline title="NVD - National Vulnerability Database" text="NVD - National Vulnerability Database"
+                xmlUrl="https://nvd.nist.gov/feeds/xml/cve/misc/nvd-rss.xml"
+                htmlUrl="https://nvd.nist.gov" type="rss"
+                description="CVEs recientes con CVSS. Alto volumen — filtrar por severidad ≥7 antes de Stage 2 (pendiente implementar)." />
+
+            <outline title="MSRC Security Update Guide" text="MSRC Security Update Guide"
+                xmlUrl="https://api.msrc.microsoft.com/update-guide/rss"
+                htmlUrl="https://msrc.microsoft.com/update-guide/" type="rss"
+                description="Boletines de seguridad de Microsoft. Muy alto volumen (2975 entradas) — requiere filtro CVSS antes de Stage 2." />
+
+            <outline title="CERT/CC Vulnerabilities" text="CERT/CC Vulnerabilities"
+                xmlUrl="https://www.kb.cert.org/vulfeed/"
+                htmlUrl="https://www.kb.cert.org" type="rss"
+                description="Vulnerabilidades coordinadas por CERT/CC con análisis técnico." />
+
+            <outline title="Full Disclosure" text="Full Disclosure"
+                xmlUrl="https://seclists.org/rss/fulldisclosure.rss"
+                htmlUrl="https://seclists.org/fulldisclosure" type="rss"
+                description="Solo títulos — requiere fetch. Divulgación pública de vulnerabilidades." />
+
+            <outline title="GitHub Security" text="GitHub Security"
+                xmlUrl="https://github.blog/security/feed/"
+                htmlUrl="https://github.blog/security" type="rss"
+                description="Full content. Vulnerabilidades en supply chain y ecosistema open source." />
+
+            <outline title="Rapid7 Blog" text="Rapid7 Blog"
+                xmlUrl="https://blog.rapid7.com/rss/"
+                htmlUrl="https://blog.rapid7.com" type="rss"
+                description="Full content. Análisis de vulnerabilidades, Metasploit y threat intel." />
+
+            <outline title="Qualys Security Blog" text="Qualys Security Blog"
+                xmlUrl="https://blog.qualys.com/feed"
+                htmlUrl="https://blog.qualys.com" type="rss"
+                description="Full content. Análisis técnico de vulnerabilidades con contexto de remediación." />
+
+            <outline title="Red Hat Security" text="Red Hat Security"
+                xmlUrl="https://www.redhat.com/en/rss/blog/channel/security"
+                htmlUrl="https://www.redhat.com/en/blog/channel/security" type="rss"
+                description="Full content. CVEs en Linux, kernel y ecosistema open source." />
+
+            <outline title="Vulners" text="Vulners"
+                xmlUrl="https://vulners.com/rss.xml"
+                htmlUrl="https://vulners.com" type="rss"
+                description="Solo títulos — URLs bloqueadas (403). NO scrapear. Usar como señal de correlación con el título solamente." />
+
+            <outline title="AWS Security Bulletins" text="AWS Security Bulletins"
+                xmlUrl="https://aws.amazon.com/security/security-bulletins/rss/feed/"
+                htmlUrl="https://aws.amazon.com/security/security-bulletins" type="rss"
+                description="Boletines oficiales de AWS. Bajo volumen, alta relevancia para entornos cloud." />
+
+            <!-- ── Nuevas fuentes agregadas 2026-04-22 ── -->
+
+            <outline title="Zero Day Initiative (ZDI) — Published" text="ZDI Published Advisories"
+                xmlUrl="https://www.zerodayinitiative.com/rss/published/"
+                htmlUrl="https://www.zerodayinitiative.com/advisories/published/" type="rss"
+                description="Solo metadatos — NO scrapear. Advisory IDs, CVEs y affected vendor/product. Programa de bug bounty de Trend Micro: alertas tempranas de 0-days antes del parche del vendor." />
+
+            <outline title="Tenable Security Research" text="Tenable Security Research"
+                xmlUrl="https://www.tenable.com/security/research/feed"
+                htmlUrl="https://www.tenable.com/security/research" type="rss"
+                description="Full content. Análisis técnico de CVEs con contexto de exploitabilidad real. Complementa CVSS con evaluación de riesgo práctico." />
+        </outline>
+
+        <!-- ════════════════════════════════════════════
+             LATAM — Fuentes en español con foco regional
+             ════════════════════════════════════════════ -->
+        <outline text="LATAM">
+            <outline title="WeLiveSecurity ES (ESET Latinoamérica)" text="WeLiveSecurity ES"
+                xmlUrl="https://www.welivesecurity.com/es/feed/"
+                htmlUrl="https://www.welivesecurity.com/es/" type="rss"
+                description="Full content. ESET Lab Latinoamérica: análisis de malware y amenazas regionales." />
+
+            <outline title="Segu-Info" text="Segu-Info"
+                xmlUrl="https://blog.segu-info.com.ar/feeds/posts/default"
+                htmlUrl="https://blog.segu-info.com.ar" type="rss"
+                description="Full content. Blog argentino activo desde 2000, agrega noticias de seguridad en español." />
+
+            <outline title="Una al Día (Hispasec)" text="Una al Día"
+                xmlUrl="https://unaaldia.hispasec.com/feeds/posts/default"
+                htmlUrl="https://unaaldia.hispasec.com" type="rss"
+                description="Full content. Boletín diario de vulnerabilidades en español, muy activo." />
+
+            <outline title="DragonJAR Security" text="DragonJAR"
+                xmlUrl="https://www.dragonjar.org/feed"
+                htmlUrl="https://www.dragonjar.org" type="rss"
+                description="Full content. Comunidad colombiana de seguridad, técnica y ofensiva." />
+
+            <outline title="El Lado del Mal" text="El Lado del Mal"
+                xmlUrl="https://www.elladodelmal.com/feeds/posts/default"
+                htmlUrl="https://www.elladodelmal.com" type="rss"
+                description="Full content. Blog español técnico de Chema Alonso, muy activo y variado." />
+
+            <outline title="ITware Latam - Ciberseguridad" text="ITware Latam Ciberseguridad"
+                xmlUrl="https://itwarelatam.com/category/corporativo/seguridad/ciberseguridad/feed/"
+                htmlUrl="https://itwarelatam.com" type="rss"
+                description="Noticias IT corporativas de Latinoamérica con sección dedicada a ciberseguridad." />
+
+            <outline title="CyberSecurity News ES" text="CyberSecurity News ES"
+                xmlUrl="https://cybersecuritynews.es/feed/"
+                htmlUrl="https://cybersecuritynews.es" type="rss"
+                description="Revista de ciberseguridad para España y LATAM." />
+
+            <!-- ── Nueva fuente agregada 2026-04-22 ── -->
+
+            <outline title="INCIBE-CERT Vulnerabilidades" text="INCIBE-CERT"
+                xmlUrl="https://www.incibe-cert.es/feed/vulnerabilities"
+                htmlUrl="https://www.incibe-cert.es/alerta-temprana/vulnerabilidades" type="rss"
+                description="Full content. CERT nacional español. Avisos de vulnerabilidades en español con contexto de remediación — relevante para empresas españolas y LATAM." />
+        </outline>
+
+    </body>
+</opml>

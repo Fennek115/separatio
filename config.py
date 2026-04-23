@@ -99,3 +99,28 @@ SUMMARY_TIMEOUT = 240
 REPORT_TIMEOUT  = 900
 
 MAX_RETRIES    = 2     # reintentos si falla la extracción de contenido
+
+# ─────────────────────────────────────────────
+# CORRELATOR (Stage 2.5)
+# ─────────────────────────────────────────────
+
+# Dominios cuyas URLs bloquean el scraping (403 u otros).
+# El extractor omite el fetch y usa el contenido del RSS directamente.
+NO_SCRAPE_DOMAINS = {
+    "vulners.com",
+    "sploitus.com",
+}
+
+# CISA KEV — catálogo oficial de CVEs explotados activamente en producción.
+CISA_KEV_URL      = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+KEV_FETCH_TIMEOUT = 15   # segundos
+
+# ─────────────────────────────────────────────
+# REPORTES
+# ─────────────────────────────────────────────
+
+# Tokens máximos para Stage 3 (2 secciones requieren más que el informe único)
+REPORT_MAX_TOKENS = 3500
+
+# True → genera vuln-briefing-* y threat-digest-* además del threat-briefing-* completo
+SPLIT_REPORTS = True
