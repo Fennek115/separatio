@@ -48,7 +48,7 @@ REPORT_MODEL  = "qwen3.5:9b"
 # Etapa 2 → False (queremos JSON directo, sin overhead de razonamiento)
 # Etapa 3 → True  (queremos que planifique el informe antes de escribirlo)
 SUMMARY_THINKING = False
-REPORT_THINKING  = True
+REPORT_THINKING  = False
 
 # Workers paralelos para Etapa 2.
 # Con CPU-only Ollama serializa las requests al mismo modelo aunque lleguen en paralelo.
@@ -75,6 +75,11 @@ MIN_CVSS_FOR_HIGHLIGHT = 7.0  # Solo resaltar CVEs con CVSS ≥ este valor
 # Categorías del OPML a incluir (None = todas las 5 categorías)
 # Opciones: "Cibersecurity", "Hacking & Research", "Threat Intel", "Vulnerability", "LATAM"
 FEED_CATEGORIES = None
+
+# Máximo de artículos a tomar por feed por ejecución.
+# Evita que feeds de alto volumen (MSRC ~2975, Black Hills ~909) monopolicen el batch.
+# None = sin límite por feed (solo aplica MAX_ARTICLES global).
+PER_FEED_LIMIT = 10
 
 # ─────────────────────────────────────────────
 # OUTPUT
@@ -119,8 +124,8 @@ KEV_FETCH_TIMEOUT = 15   # segundos
 # REPORTES
 # ─────────────────────────────────────────────
 
-# Tokens máximos para Stage 3 (2 secciones requieren más que el informe único)
-REPORT_MAX_TOKENS = 3500
+# Tokens máximos para Stage 3 (con think=False todos los tokens van al reporte)
+REPORT_MAX_TOKENS = 4000
 
 # True → genera vuln-briefing-* y threat-digest-* además del threat-briefing-* completo
 SPLIT_REPORTS = True

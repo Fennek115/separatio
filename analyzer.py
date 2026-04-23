@@ -7,6 +7,7 @@ analyzer.py — Etapas 2 y 3 del pipeline.
 import json
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional, Union
 import ollama
@@ -83,6 +84,45 @@ Redactas briefings ejecutivos de seguridad claros, precisos y accionables.
 Escribe en español profesional."""
 
 
+def _build_pre_analysis(summaries: list[ArticleSummary]) -> str:
+    """
+    Pre-computa estadísticas que el modelo usaría en su bloque <think>.
+    Inyectarlas explícitamente permite desactivar thinking sin perder calidad.
+    """
+    sev_order = ["Crítica", "Alta", "Media", "Baja", "Informativa"]
+    sev_dist  = Counter(s.severity for s in summaries)
+    sev_line  = " | ".join(
+        f"{s}: {sev_dist[s]}" for s in sev_order if sev_dist.get(s)
+    )
+
+    cve_counts = Counter(
+        cve for s in summaries for cve in s.cves
+    )
+    top_cves_line = ", ".join(
+        f"{cve} ({n} fuentes)" for cve, n in cve_counts.most_common(8)
+    ) or "ninguno"
+
+    type_counts = Counter(s.threat_type for s in summaries if s.threat_type)
+    top_types_line = ", ".join(
+        f"{t} ({n})" for t, n in type_counts.most_common(6)
+    )
+
+    critical_high = [s for s in summaries if s.severity_score >= 4][:8]
+    priority_lines = "\n".join(
+        f"  - [{s.severity}] {s.title[:80]} ({s.feed_title})"
+        for s in critical_high
+    ) or "  - Ninguno"
+
+    return (
+        f"ANÁLISIS PREVIO (calculado por código — úsalo como base estructural):\n"
+        f"  Distribución de severidad: {sev_line}\n"
+        f"  CVEs más reportados: {top_cves_line}\n"
+        f"  Tipos de amenaza dominantes: {top_types_line}\n"
+        f"  Artículos Críticos/Altos ({len(critical_high)}):\n"
+        f"{priority_lines}"
+    )
+
+
 def build_report_prompt(summaries: list[ArticleSummary],
                         date_str: str, language: str = "español",
                         correlation=None) -> str:
@@ -101,12 +141,15 @@ def build_report_prompt(summaries: list[ArticleSummary],
 
     unique_feeds = len(set(s.feed_title for s in summaries))
 
+    pre_analysis = _build_pre_analysis(summaries)
+
     correlation_block = ""
     if correlation is not None and correlation.has_signals():
         correlation_block = f"\n{correlation.format_for_prompt()}\n"
 
     return f"""Fecha del informe: {date_str}
-Total de artículos analizados: {len(summaries)}
+Total de artículos analizados: {len(summaries)} de {unique_feeds} fuentes
+{pre_analysis}
 {correlation_block}
 ARTÍCULOS ANALIZADOS:
 {chr(10).join(items)}

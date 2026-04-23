@@ -87,7 +87,11 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
     logger.info("ETAPA 1: Obteniendo artículos de Miniflux")
     logger.info("═" * 50)
 
-    articles = client.get_unread_articles(limit=limit)
+    # Fetch a wider pool when per-feed capping is active so high-volume feeds
+    # (MSRC: 2975 entries, Black Hills: 909) don't monopolize the global limit.
+    per_feed = getattr(config, "PER_FEED_LIMIT", None)
+    fetch_limit = min(limit * 5, 1000) if per_feed else limit
+    articles = client.get_unread_articles(limit=fetch_limit)
     if not articles:
         logger.warning("No hay artículos no leídos.")
         return []
@@ -96,6 +100,19 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
         before   = len(articles)
         articles = [a for a in articles if a.feed_category in config.FEED_CATEGORIES]
         logger.info(f"Filtro por categorías: {before} → {len(articles)} artículos")
+
+    if per_feed:
+        from collections import defaultdict
+        counts: dict[str, int] = defaultdict(int)
+        capped = []
+        for a in articles:   # already sorted by published_at desc from Miniflux
+            if counts[a.feed_title] < per_feed:
+                capped.append(a)
+                counts[a.feed_title] += 1
+        logger.info(
+            f"Límite por feed ({per_feed}): pool={len(articles)} → {len(capped)} artículos"
+        )
+        articles = capped[:limit]
 
     logger.info(f"Procesando {len(articles)} artículos...")
     processed = []
