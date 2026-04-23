@@ -7,7 +7,7 @@
 
 Applied to cybersecurity intelligence: the daily flood of security publications contains both gold and dross. This pipeline performs the separation automatically — ingesting curated sources, discarding what is redundant or low-signal, and distilling what remains into a structured daily briefing.
 
-No data leaves your infrastructure. No external APIs. Local LLM, self-hosted RSS reader, your hardware.
+Runs fully local with Ollama by default. Optionally routes Stage 2 and Stage 3 to Claude, OpenAI, or Gemini APIs — a single config change, no code modifications required.
 
 ---
 
@@ -76,25 +76,96 @@ Runs on Proxmox with two LXC containers:
 pip install -r requirements.txt
 ```
 
-Pull models in Ollama (LXC 111):
-```bash
-ollama pull qwen3.5:4b   # Stage 2 — per-article extraction (~3.2 GB RAM)
-ollama pull qwen3.5:9b   # Stage 3 — consolidated report   (~7.2 GB RAM)
-```
-
-Edit `config.py`:
+Edit `config.py` with your Miniflux connection:
 ```python
-OLLAMA_HOST       = "http://<IP_LXC_111>:11434"
-MINIFLUX_URL      = "http://localhost:8080"
+MINIFLUX_URL       = "http://localhost:8080"
 MINIFLUX_API_TOKEN = "your-api-token"   # Settings → API Keys in Miniflux UI
 ```
 
-Import feeds into Miniflux: Settings → OPML → Import `threat-analysis-feeds.opml`
+Import feeds: Miniflux → Settings → OPML → Import `threat-analysis-feeds.opml`
 
 Verify connectivity:
 ```bash
 python setup_check.py
 ```
+
+---
+
+## LLM providers
+
+The pipeline supports four providers. Change `PROVIDER` in `config.py` and set the matching model names — everything else stays the same.
+
+### Ollama (default — fully local)
+
+Requires a running Ollama instance (see Infrastructure above).
+
+```python
+PROVIDER      = "ollama"
+SUMMARY_MODEL = "qwen3.5:4b"
+REPORT_MODEL  = "qwen3.5:9b"
+OLLAMA_HOST   = "http://<IP_LXC_111>:11434"
+```
+
+Pull the models once:
+```bash
+ollama pull qwen3.5:4b
+ollama pull qwen3.5:9b
+```
+
+Timing on i7-10510U (CPU-only): ~1.75 min/article → 120 articles ≈ 3.5h total.
+
+### Claude (Anthropic)
+
+```bash
+pip install anthropic
+```
+
+```python
+PROVIDER          = "claude"
+SUMMARY_MODEL     = "claude-haiku-4-5-20251001"   # fast + cheap for per-article extraction
+REPORT_MODEL      = "claude-sonnet-4-6"            # quality report generation
+ANTHROPIC_API_KEY = "sk-ant-..."                   # or set env var ANTHROPIC_API_KEY
+```
+
+Estimated cost for a 120-article run: ~$0.05–0.10 (Haiku for Stage 2, Sonnet for Stage 3).
+Stage 2: ~2 min total. Stage 3: ~30 sec.
+
+### OpenAI
+
+```bash
+pip install openai
+```
+
+```python
+PROVIDER       = "openai"
+SUMMARY_MODEL  = "gpt-4o-mini"   # Stage 2
+REPORT_MODEL   = "gpt-4o"        # Stage 3
+OPENAI_API_KEY = "sk-..."        # or set env var OPENAI_API_KEY
+```
+
+### Gemini (Google)
+
+```bash
+pip install google-generativeai
+```
+
+```python
+PROVIDER       = "gemini"
+SUMMARY_MODEL  = "gemini-2.0-flash"   # Stage 2
+REPORT_MODEL   = "gemini-2.5-pro"     # Stage 3
+GEMINI_API_KEY = "AIza..."            # or set env var GEMINI_API_KEY
+```
+
+### Provider comparison
+
+| Provider | Stage 2 time (120 articles) | Stage 3 time | Privacy | Cost/run |
+|----------|-----------------------------|--------------|---------|----------|
+| Ollama | ~3.5h (CPU-only) | ~20–30 min | Full — data stays local | Free |
+| Claude | ~2 min | ~30 sec | Articles sent to Anthropic | ~$0.05–0.10 |
+| OpenAI | ~2 min | ~30 sec | Articles sent to OpenAI | ~$0.05–0.15 |
+| Gemini | ~2 min | ~30 sec | Articles sent to Google | ~$0.01–0.05 |
+
+Cloud providers use direct API calls (no streaming). Ollama uses streaming in Stage 3 to avoid timeout on long CPU-only generations.
 
 ---
 
@@ -183,10 +254,16 @@ Key variables in `config.py`:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `OLLAMA_HOST` | `http://<IP>:11434` | LXC 111 |
-| `MINIFLUX_URL` | `http://localhost:8080` | LXC 112 |
-| `MAX_ARTICLES` | 120 | Hard cap per run (context window ~140 max for qwen3.5:9b) |
+| `PROVIDER` | `"ollama"` | `ollama` \| `claude` \| `openai` \| `gemini` |
+| `SUMMARY_MODEL` | `"qwen3.5:4b"` | Model for Stage 2 — set to match your provider |
+| `REPORT_MODEL` | `"qwen3.5:9b"` | Model for Stage 3 — set to match your provider |
+| `ANTHROPIC_API_KEY` | `""` | Required when `PROVIDER=claude` |
+| `OPENAI_API_KEY` | `""` | Required when `PROVIDER=openai` |
+| `GEMINI_API_KEY` | `""` | Required when `PROVIDER=gemini` |
+| `OLLAMA_HOST` | `http://<IP>:11434` | Required when `PROVIDER=ollama` |
+| `MINIFLUX_URL` | `http://localhost:8080` | Miniflux instance |
+| `MAX_ARTICLES` | 120 | Hard cap per run |
 | `PER_FEED_LIMIT` | 10 | Prevents high-volume feeds (MSRC: 2975 entries) from dominating |
-| `REPORT_THINKING` | False | Disabled; pre-computed analytics injected instead |
+| `REPORT_THINKING` | False | Ollama only; pre-computed analytics injected instead |
 | `FEED_CATEGORIES` | None | Override with `--categories` CLI arg |
 | `PARALLEL_WORKERS` | 1 | Keep at 1 for CPU-only Ollama |
