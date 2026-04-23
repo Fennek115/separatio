@@ -171,6 +171,7 @@ def _summarize_one(item: dict, dry_run: bool) -> ArticleSummary:
         thinking=config.SUMMARY_THINKING,
         num_ctx=config.SUMMARY_CTX,
         num_threads=config.OLLAMA_NUM_THREADS,
+        provider=config.PROVIDER,
     )
 
 
@@ -266,6 +267,7 @@ def stage3_report(summaries: list[ArticleSummary],
             num_threads=config.OLLAMA_NUM_THREADS,
             correlation=correlation,
             max_tokens=config.REPORT_MAX_TOKENS,
+            provider=config.PROVIDER,
         )
 
     total_feeds = len(set(s.feed_title for s in summaries))
@@ -296,13 +298,22 @@ def main():
                         help="Regenerar informe desde caché JSON existente")
     parser.add_argument("--no-mark-read", action="store_true",
                         help="No marcar artículos como leídos en Miniflux")
+    parser.add_argument("--categories", type=str, default=None,
+                        help='Categorías a procesar, separadas por coma. '
+                             'Ej: --categories "Vulnerability,Threat Intel". '
+                             'Sobreescribe FEED_CATEGORIES en config.py.')
     args = parser.parse_args()
+
+    if args.categories:
+        config.FEED_CATEGORIES = [c.strip() for c in args.categories.split(",")]
 
     Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
     date_str = datetime.now().strftime("%Y-%m-%d")
     logger.info(f"\n{'═' * 50}")
     logger.info(f"  THREAT INTELLIGENCE PIPELINE — {date_str}")
+    if config.FEED_CATEGORIES:
+        logger.info(f"  Categorías: {', '.join(config.FEED_CATEGORIES)}")
     logger.info(f"{'═' * 50}\n")
 
     if args.report_only:
@@ -336,7 +347,7 @@ def main():
     if config.MARK_AS_READ and not args.no_mark_read:
         client.mark_as_read([a["article_id"] for a in articles])
 
-    if not args.dry_run:
+    if not args.dry_run and config.PROVIDER == "ollama":
         unload_model(config.SUMMARY_MODEL, config.OLLAMA_HOST)
 
     correlation = stage25_correlate(summaries)

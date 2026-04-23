@@ -104,14 +104,17 @@ Key tunable values:
 | `MAX_ARTICLES` | 120 | Hard cap per run |
 | `PARALLEL_WORKERS` | 1 | Keep at 1 for CPU-only |
 | `SUMMARY_TIMEOUT` | 240 | Seconds; per-article Stage 2 |
-| `REPORT_TIMEOUT` | 900 | Seconds between stream chunks Stage 3 |
+| `REPORT_TIMEOUT` | 2400 | Seconds between stream chunks Stage 3; first chunk can take 20-30 min on CPU-only (model load) |
 | `REPORT_THINKING` | True | Set to False for faster testing |
-| `FEED_CATEGORIES` | None | List of category names to filter, or None for all |
+| `FEED_CATEGORIES` | None | List of category names to filter, or None for all. Override via `--categories` CLI. |
 
 ## Cron (LXC 112)
 
 ```cron
-30 6 * * * root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py >> /var/log/threat-pipeline.log 2>&1
+0 3 * * * root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py >> /var/log/threat-pipeline.log 2>&1
 ```
 
-With `think=True` on i7-10510U, Stage 3 takes 30–60 min for ~100 articles. The 06:30 cron leaves the report ready by ~08:00.
+Timing on i7-10510U (CPU-only):
+- Stage 2: ~1.75 min/article → 120 artículos ≈ 3.5 horas
+- Stage 3: `think=False` → ~15–20 min para cualquier volumen de artículos
+- Total: ~3.75 horas → cron a las 03:00 deja el reporte listo ~06:45, antes de las 08:00.

@@ -228,6 +228,96 @@ def _build_options(num_ctx: int, num_predict: int,
     return options
 
 
+def _get_api_key(provider: str) -> str:
+    import config
+    keys = {
+        "claude": getattr(config, "ANTHROPIC_API_KEY", ""),
+        "openai": getattr(config, "OPENAI_API_KEY", ""),
+        "gemini": getattr(config, "GEMINI_API_KEY", ""),
+    }
+    key = keys.get(provider, "")
+    if not key:
+        raise ValueError(
+            f"API key para '{provider}' no configurada. "
+            f"Revisa config.py o la variable de entorno correspondiente."
+        )
+    return key
+
+
+def _llm_chat(
+    system: str,
+    user: str,
+    provider: str,
+    model: str,
+    max_tokens: int,
+    temperature: float = 0.1,
+    ollama_host: str = "",
+    timeout: int = 120,
+    thinking: bool = False,
+    num_ctx: int = 4096,
+    num_threads: int = 0,
+) -> str:
+    """Llamada LLM unificada para todos los proveedores. Devuelve texto limpio."""
+    if provider == "ollama":
+        client = ollama.Client(host=ollama_host, timeout=timeout)
+        options = _build_options(num_ctx, max_tokens, temperature, num_threads)
+        response = client.chat(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+            think=thinking,
+            options=options,
+        )
+        return _strip_llm_output(response["message"]["content"])
+
+    elif provider == "claude":
+        import anthropic
+        client = anthropic.Anthropic(api_key=_get_api_key("claude"))
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return _strip_llm_output(response.content[0].text)
+
+    elif provider == "openai":
+        import openai
+        client = openai.OpenAI(api_key=_get_api_key("openai"))
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+        )
+        return _strip_llm_output(response.choices[0].message.content)
+
+    elif provider == "gemini":
+        import google.generativeai as genai
+        genai.configure(api_key=_get_api_key("gemini"))
+        gemini_model = genai.GenerativeModel(
+            model_name=model,
+            system_instruction=system,
+        )
+        response = gemini_model.generate_content(
+            user,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+            ),
+        )
+        return _strip_llm_output(response.text)
+
+    else:
+        raise ValueError(f"Provider desconocido: {provider!r}. Opciones: ollama, claude, openai, gemini")
+
+
 # ─────────────────────────────────────────────────────────
 # FUNCIONES PRINCIPALES
 # ─────────────────────────────────────────────────────────
@@ -241,8 +331,8 @@ def summarize_article(
     thinking: bool = False,
     num_ctx: int = 2048,
     num_threads: int = 0,
-    keep_alive: Optional[Union[float, str]] = None,
     max_retries: int = 1,
+    provider: str = "ollama",
 ) -> ArticleSummary:
     summary = ArticleSummary(
         article_id=article_id, title=title, url=url,
@@ -250,23 +340,22 @@ def summarize_article(
         published_at=published_at,
     )
     prompt = build_summary_prompt(title, content, feed_title, feed_category)
-    client = ollama.Client(host=ollama_host, timeout=timeout)
-    options = _build_options(num_ctx, num_predict=400,
-                             temperature=0.1, num_threads=num_threads)
 
     for attempt in range(max_retries + 1):
         try:
-            response = client.chat(
+            raw = _llm_chat(
+                system=SUMMARY_SYSTEM_PROMPT,
+                user=prompt,
+                provider=provider,
                 model=model,
-                messages=[
-                    {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-                    {"role": "user",   "content": prompt},
-                ],
-                think=thinking,
-                keep_alive=keep_alive,
-                options=options,
+                max_tokens=400,
+                temperature=0.1,
+                ollama_host=ollama_host,
+                timeout=timeout,
+                thinking=thinking,
+                num_ctx=num_ctx,
+                num_threads=num_threads,
             )
-            raw  = _strip_llm_output(response["message"]["content"])
             data = json.loads(raw)
 
             summary.threat_type      = data.get("threat_type", "Otro")
@@ -327,38 +416,52 @@ def generate_report(
     num_threads: int = 0,
     correlation=None,
     max_tokens: int = 3500,
+    provider: str = "ollama",
 ) -> str:
     sorted_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    prompt  = build_report_prompt(sorted_summaries, date_str, language, correlation)
-    # timeout aquí aplica entre chunks (no al total), lo que permite generaciones largas
-    client  = ollama.Client(host=ollama_host, timeout=timeout)
-    options = _build_options(num_ctx, num_predict=max_tokens,
-                             temperature=0.3, num_threads=num_threads)
+    prompt = build_report_prompt(sorted_summaries, date_str, language, correlation)
 
     try:
-        stream = client.chat(
-            model=model,
-            messages=[
-                {"role": "system", "content": REPORT_SYSTEM_PROMPT},
-                {"role": "user",   "content": prompt},
-            ],
-            think=thinking,
-            options=options,
-            stream=True,
-        )
+        if provider == "ollama":
+            # Streaming para evitar timeout en generaciones largas en CPU-only.
+            # timeout aplica entre chunks, no al total.
+            client  = ollama.Client(host=ollama_host, timeout=timeout)
+            options = _build_options(num_ctx, num_predict=max_tokens,
+                                     temperature=0.3, num_threads=num_threads)
+            stream = client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": REPORT_SYSTEM_PROMPT},
+                    {"role": "user",   "content": prompt},
+                ],
+                think=thinking,
+                options=options,
+                stream=True,
+            )
+            tokens: list[str] = []
+            total = 0
+            for chunk in stream:
+                token = chunk["message"]["content"]
+                if token:
+                    tokens.append(token)
+                    total += 1
+                    if total % 100 == 0:
+                        logger.info(f"  Generando informe... {total} tokens")
+            logger.info(f"  Informe generado: {total} tokens")
+            return _strip_llm_output("".join(tokens))
 
-        tokens: list[str] = []
-        total = 0
-        for chunk in stream:
-            token = chunk["message"]["content"]
-            if token:
-                tokens.append(token)
-                total += 1
-                if total % 100 == 0:
-                    logger.info(f"  Generando informe... {total} tokens")
-
-        logger.info(f"  Informe generado: {total} tokens")
-        return _strip_llm_output("".join(tokens))
+        else:
+            # Cloud providers responden en segundos — no necesitan streaming.
+            result = _llm_chat(
+                system=REPORT_SYSTEM_PROMPT,
+                user=prompt,
+                provider=provider,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=0.3,
+            )
+            logger.info(f"  Informe generado ({provider})")
+            return result
 
     except Exception as e:
         logger.error(f"Error generando informe: {e}")

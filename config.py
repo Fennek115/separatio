@@ -9,6 +9,25 @@ Infraestructura:
   - Pipeline corre en LXC 112 (o en el host directamente)
 """
 
+import os
+
+# ─────────────────────────────────────────────
+# LLM PROVIDER
+# ─────────────────────────────────────────────
+# Opciones: "ollama" | "claude" | "openai" | "gemini"
+PROVIDER = "ollama"
+
+# Nombres de modelo según el proveedor elegido:
+#   ollama  → "qwen3.5:4b" / "qwen3.5:9b"
+#   claude  → "claude-haiku-4-5-20251001" / "claude-sonnet-4-6"
+#   openai  → "gpt-4o-mini" / "gpt-4o"
+#   gemini  → "gemini-2.0-flash" / "gemini-2.5-pro"
+
+# API keys — lee de variable de entorno o edita directamente aquí
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
+GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
+
 # ─────────────────────────────────────────────
 # MINIFLUX
 # ─────────────────────────────────────────────
@@ -100,8 +119,9 @@ HTTP_TIMEOUT    = 15   # segundos para web scraping
 # Etapa 2: qwen3.5:4b sin thinking — ~2 min por artículo en i7-10510U
 SUMMARY_TIMEOUT = 240
 
-# Etapa 3: qwen3.5:9b con thinking=True — puede tardar 10-15 min para ~100 artículos
-REPORT_TIMEOUT  = 900
+# Etapa 3: qwen3.5:9b — el primer chunk puede tardar 20-30 min mientras el modelo
+# carga 7.2 GB en RAM en CPU-only. El timeout aplica ENTRE chunks, no al total.
+REPORT_TIMEOUT  = 2400
 
 MAX_RETRIES    = 2     # reintentos si falla la extracción de contenido
 
@@ -125,7 +145,8 @@ KEV_FETCH_TIMEOUT = 15   # segundos
 # ─────────────────────────────────────────────
 
 # Tokens máximos para Stage 3 (con think=False todos los tokens van al reporte)
-REPORT_MAX_TOKENS = 4000
+# ~2500-3500 tokens para un informe normal; 6000 da margen en Patch Tuesday / días activos
+REPORT_MAX_TOKENS = 6000
 
 # True → genera vuln-briefing-* y threat-digest-* además del threat-briefing-* completo
 SPLIT_REPORTS = True

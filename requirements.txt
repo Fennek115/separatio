@@ -3,3 +3,8 @@ trafilatura>=1.9.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+
+# Cloud providers — instala solo el que vayas a usar
+# pip install anthropic           # PROVIDER = "claude"
+# pip install openai              # PROVIDER = "openai"
+# pip install google-generativeai # PROVIDER = "gemini"
