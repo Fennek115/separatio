@@ -107,6 +107,18 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
         )
         articles = capped[:limit]
 
+    # Deduplicar por URL — la misma noticia puede aparecer en varios feeds.
+    # Mantenemos la primera ocurrencia (ya viene ordenado por published_at desc).
+    seen_urls: set[str] = set()
+    deduped = []
+    for a in articles:
+        if a.url not in seen_urls:
+            seen_urls.add(a.url)
+            deduped.append(a)
+    if len(deduped) < len(articles):
+        logger.info(f"Deduplicación por URL: {len(articles)} → {len(deduped)} artículos")
+    articles = deduped
+
     logger.info(f"Procesando {len(articles)} artículos...")
     processed = []
 
@@ -266,6 +278,14 @@ def stage3_report(summaries: list[ArticleSummary],
     logger.info(f"ETAPA 3: Generando informe con {config.REPORT_MODEL}")
     logger.info("═" * 50)
 
+    valid = [s for s in summaries if s.error is None]
+    errored = len(summaries) - len(valid)
+    if errored:
+        logger.warning(
+            f"  {errored} resúmenes descartados por error de extracción JSON "
+            f"(campos vacíos — no aptos para Stage 3)"
+        )
+
     if dry_run:
         markdown = (
             "===VULNERABILITY_BRIEFING===\n"
@@ -275,9 +295,9 @@ def stage3_report(summaries: list[ArticleSummary],
             "===END==="
         )
     else:
-        logger.info(f"  Enviando {len(summaries)} resúmenes al modelo...")
+        logger.info(f"  Enviando {len(valid)} resúmenes válidos al modelo...")
         markdown = generate_report(
-            summaries=summaries,
+            summaries=valid,
             date_str=date_str,
             model=config.REPORT_MODEL,
             ollama_host=getattr(config, "OLLAMA_HOST", ""),

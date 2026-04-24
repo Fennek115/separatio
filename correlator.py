@@ -132,6 +132,22 @@ def _is_valid_cve(cve: str) -> bool:
     return bool(re.match(r"^CVE-\d{4}-\d{4,}$", cve))
 
 
+def _normalize_ioc(raw: str) -> str:
+    """Normaliza IOCs defangeados para que la correlación cruce correctamente.
+
+    evil[.]com  → evil.com
+    1.2.3[.]4   → 1.2.3.4
+    evil[dot]com → evil.com
+    hxxp://      → http://
+    hxxps://     → https://
+    """
+    ioc = raw.strip()
+    ioc = re.sub(r"\[\.\]", ".", ioc)
+    ioc = re.sub(r"\[dot\]", ".", ioc, flags=re.IGNORECASE)
+    ioc = re.sub(r"^hxxps?://", lambda m: m.group().replace("hxx", "htt"), ioc, flags=re.IGNORECASE)
+    return ioc.lower()
+
+
 def _dedup(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
@@ -191,8 +207,8 @@ def build_correlation_context(
     # ── IOC correlation ──────────────────────────────────
     ioc_map: dict[str, list[str]] = defaultdict(list)
     for s in summaries:
-        for ioc in s.iocs:
-            ioc = ioc.strip()
+        for raw_ioc in s.iocs:
+            ioc = _normalize_ioc(raw_ioc)
             if ioc and len(ioc) > 4:   # descartar valores triviales
                 ioc_map[ioc].append(s.feed_title)
     ctx.corroborated_iocs = {
