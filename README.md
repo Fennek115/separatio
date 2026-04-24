@@ -70,7 +70,7 @@ Miniflux RSS (unread articles, sorted by published_at desc)
 ### 1. Clone and set up the environment
 
 ```bash
-git clone <repo-url> /opt/threat-pipeline
+git clone https://github.com/Fennek115/separatio /opt/threat-pipeline
 cd /opt/threat-pipeline
 
 python3 -m venv venv
