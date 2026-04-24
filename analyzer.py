@@ -49,7 +49,7 @@ _SEVERITY_SCORE: dict[str, int] = {
 # PROMPTS
 # ─────────────────────────────────────────────────────────
 
-SUMMARY_SYSTEM_PROMPT = """Eres un analista de ciberseguridad experto.
+SUMMARY_SYSTEM_PROMPT = """Eres un analista de ciberseguridad experto en Threat Intelligence.
 Analiza artículos de seguridad y extrae información estructurada en JSON.
 Responde ÚNICAMENTE con el objeto JSON, sin explicaciones ni markdown."""
 
@@ -67,17 +67,18 @@ Responde SOLO con este JSON (sin bloques markdown, sin texto adicional):
 {{
   "threat_type": "tipo de amenaza (ej: Ransomware, APT, CVE, Phishing, DDoS, Supply Chain, Malware, Vulnerability, Data Breach, Hacktivism, Otro)",
   "severity": "Crítica|Alta|Media|Baja|Informativa",
-  "actors": ["lista de actores/grupos conocidos, vacío si no aplica"],
+  "actors": ["lista de actores/grupos/países conocidos, vacío si no aplica"],
   "cves": ["lista de CVE-XXXX-XXXXX mencionados, vacío si no hay"],
   "affected_systems": ["sistemas/productos/sectores afectados"],
-  "summary": "Resumen conciso en 2-3 oraciones en español sobre la amenaza o vulnerabilidad.",
-  "iocs": ["IPs, dominios, hashes u otros IoCs si se mencionan explícitamente"]
+  "summary": "Análisis técnico en 4-5 oraciones en español: qué ocurrió, cómo funciona la técnica/vulnerabilidad (TTPs/MITRE), sistemas o sectores afectados, nivel de explotación activa, e impacto potencial.",
+  "iocs": ["IPs, dominios, hashes SHA256/MD5, URLs o firmas de red mencionados explícitamente"]
 }}"""
 
 
-REPORT_SYSTEM_PROMPT = """Eres un analista senior de Cyber Threat Intelligence.
-Redactas briefings ejecutivos de seguridad claros, precisos y accionables.
-Escribe en español profesional."""
+REPORT_SYSTEM_PROMPT = """Eres un analista senior de Cyber Threat Intelligence con 15 años de experiencia en SOC, CERT y Red Team.
+Redactas briefings ejecutivos de seguridad claros, técnicamente precisos y accionables.
+Tu análisis incluye siempre: contexto de campaña, TTPs (frameworkMITRE ATT&CK cuando aplique), impacto real vs. teórico, y priorización por riesgo operacional.
+Escribe en español profesional. No uses frases genéricas como "es importante parchear" sin justificar el riesgo concreto."""
 
 
 def _build_pre_analysis(summaries: list[ArticleSummary]) -> str:
@@ -126,13 +127,16 @@ def build_report_prompt(summaries: list[ArticleSummary],
     for i, s in enumerate(summaries, 1):
         cves_str     = ", ".join(s.cves) if s.cves else "ninguno"
         actors_str   = ", ".join(s.actors) if s.actors else "no identificados"
-        affected_str = ", ".join(s.affected_systems[:3]) if s.affected_systems else "no especificado"
+        affected_str = ", ".join(s.affected_systems) if s.affected_systems else "no especificado"
+        iocs_str     = ", ".join(s.iocs[:8]) if s.iocs else "ninguno"
         items.append(
             f"[{i}] [{s.severity}] [{s.threat_type}]\n"
             f"    Título: {s.title}\n"
-            f"    Fuente: {s.feed_title} ({s.feed_category})\n"
-            f"    CVEs: {cves_str} | Actores: {actors_str} | Afectados: {affected_str}\n"
-            f"    Resumen: {s.summary}"
+            f"    Fuente: {s.feed_title} ({s.feed_category}) | URL: {s.url}\n"
+            f"    CVEs: {cves_str}\n"
+            f"    Actores: {actors_str} | Afectados: {affected_str}\n"
+            f"    IOCs: {iocs_str}\n"
+            f"    Análisis: {s.summary}"
         )
 
     unique_feeds = len(set(s.feed_title for s in summaries))
@@ -158,41 +162,48 @@ Genera DOS informes separados en {language}. Usa EXACTAMENTE estos marcadores de
 # 🔒 Vulnerability Briefing — {date_str}
 
 ## Resumen de Vulnerabilidades
-(2 párrafos: CVEs del día, nivel de riesgo, urgencia de parcheo)
+(3 párrafos: (1) panorama del día — total de CVEs, distribución de severidad, fuentes principales; (2) CVEs con explotación activa confirmada o alta probabilidad, con contexto de por qué son críticos; (3) urgencia de parcheo y ventana de exposición típica para estas vulnerabilidades)
 
 ## ⚠️ CVEs Críticos y Altos
-(Tabla: Sistema Afectado | CVE | Severidad | Explotabilidad | Acción — solo CVEs reales mencionados en los artículos)
+(Tabla con TODOS los CVEs Críticos y Altos reales mencionados en los artículos. Columnas: Sistema Afectado | CVE | CVSS/Severidad | Explotabilidad | Vector de Ataque | Acción Inmediata)
+
+## 🔬 Análisis Técnico de Vulnerabilidades Prioritarias
+(Para cada CVE crítico: párrafo de 3-4 oraciones explicando el vector técnico de explotación, condiciones necesarias, impacto concreto si se explota, y si hay evidencia de explotación in-the-wild)
 
 ## 🔑 Parches Prioritarios
-(Lista de acciones de remediación ordenadas por urgencia)
+(Lista ordenada por urgencia. Para cada ítem: sistema, CVE, razón específica de prioridad, y enlace de referencia si está disponible en los datos)
 
 ===THREAT_INTEL_DIGEST===
 
 # 🕵️ Threat Intelligence Digest — {date_str}
 
 ## Resumen Ejecutivo
-(2-3 párrafos: panorama del día, tendencias, nivel de alerta global)
+(3-4 párrafos: (1) panorama general del día con nivel de alerta; (2) tendencias dominantes observadas en TTPs y tipos de amenaza; (3) actores más activos y sus objetivos; (4) recomendación estratégica para equipos de seguridad basada en los patrones del día)
 
 ## 🔴 Amenazas Críticas y Altas
-(Lista detallada de ítems con severidad Crítica o Alta, agrupados por tipo)
+(Por cada amenaza Crítica o Alta: párrafo con título en negrita, descripción técnica del ataque o campaña incluyendo TTPs/MITRE cuando aplique, sistemas o sectores objetivo, indicadores de compromiso disponibles, y nivel de madurez/sofisticación del actor)
 
 ## 👤 Actividad de Actores de Amenaza
-(Grupos APT, cibercriminales o hacktivistas con actividad reportada — solo los mencionados explícitamente)
+(Por cada actor mencionado explícitamente: párrafo con nombre, atribución conocida (país/grupo), TTPs característicos observados en esta campaña, objetivos o víctimas reportadas, y nivel de confianza en la atribución)
+
+## 🦠 Indicadores de Compromiso (IOCs)
+(Si hay IOCs en los artículos: tabla o lista agrupada por tipo — IPs maliciosas | Dominios C2 | Hashes de malware | URLs de distribución. Solo IOCs explícitamente mencionados en las fuentes)
 
 ## 🌎 Contexto Regional LATAM
-(Amenazas o incidentes con impacto en América Latina. Si no hay, indicarlo brevemente.)
+(Amenazas o incidentes con impacto en América Latina. Si los hay: detallar qué países, sectores afectados, y qué medidas tomar. Si no hay impacto directo, analizar qué amenazas del día tienen mayor probabilidad de propagarse a la región y por qué.)
 
 ## 📋 Resumen por Categoría
-(Tabla: Categoría | Cantidad | Severidad Máxima)
+(Tabla: Categoría | Cantidad | Severidad Máxima | Tendencia vs. día típico)
 
 ## ✅ Acciones Recomendadas
-(3-5 acciones concretas y priorizadas para equipos de seguridad)
+(5-7 acciones concretas y priorizadas para equipos de seguridad, ordenadas por urgencia. Para cada acción: qué hacer, por qué es urgente, y métricas de éxito o criterio de cierre)
 
 ===END===
 
-REGLAS:
-- No inventes CVEs ni actores que no aparezcan en los artículos analizados.
-- Si las correlaciones verificadas incluyen CVEs marcados como KEV o corroborados, menciónalos en el Vulnerability Briefing como hechos confirmados.
+REGLAS CRÍTICAS:
+- No inventes CVEs, actores, IOCs ni datos que no aparezcan en los artículos analizados.
+- Si las correlaciones verificadas incluyen CVEs marcados como KEV o corroborados por múltiples fuentes, menciónalos explícitamente como confirmados.
+- Evita frases genéricas sin sustancia técnica. Cada sección debe aportar información que un analista SOC pueda usar directamente.
 - Mantén los marcadores ===VULNERABILITY_BRIEFING===, ===THREAT_INTEL_DIGEST=== y ===END=== exactamente como están.
 
 ---
@@ -345,7 +356,7 @@ def summarize_article(
                 user=prompt,
                 provider=provider,
                 model=model,
-                max_tokens=400,
+                max_tokens=600,
                 temperature=0.1,
                 ollama_host=ollama_host,
                 timeout=timeout,

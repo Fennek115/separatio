@@ -52,14 +52,20 @@ class CorrelationContext:
     trending_actors: dict[str, list[str]] = field(default_factory=dict)
     # Todos los CVEs del día y sus fuentes (para la tabla de vulnerabilidades)
     all_cve_sources: dict[str, list[str]] = field(default_factory=dict)
+    # CVE -> score EPSS (0.0–1.0) y percentil — obtenidos de FIRST.org
+    epss_scores: dict[str, dict] = field(default_factory=dict)
+    # IOC -> feeds donde se mencionó (solo IOCs en ≥2 fuentes distintas)
+    corroborated_iocs: dict[str, list[str]] = field(default_factory=dict)
 
     kev_fetch_ok: bool = False
+    epss_fetch_ok: bool = False
     total_articles: int = 0
 
     def has_signals(self) -> bool:
         return bool(
             self.corroborated_cves or self.kev_active_cves
             or self.poc_available_cves or self.trending_actors
+            or self.corroborated_iocs
         )
 
     def format_for_prompt(self) -> str:
@@ -74,23 +80,37 @@ class CorrelationContext:
         ]
 
         if self.kev_active_cves:
-            lines.append(
-                "  ★ EXPLOTADOS ACTIVAMENTE — CISA KEV: "
-                + ", ".join(self.kev_active_cves)
-            )
+            kev_with_epss = []
+            for cve in self.kev_active_cves:
+                epss = self.epss_scores.get(cve)
+                suffix = f" [EPSS {epss['epss']:.0%} — percentil {float(epss['percentile']):.0%}]" if epss else ""
+                kev_with_epss.append(f"{cve}{suffix}")
+            lines.append("  ★ EXPLOTADOS ACTIVAMENTE — CISA KEV: " + ", ".join(kev_with_epss))
+
         if self.corroborated_cves:
             lines.append("  ✓ CORROBORADOS en ≥2 fuentes independientes:")
             for cve, feeds in list(self.corroborated_cves.items())[:20]:
-                lines.append(f"      {cve} → {' | '.join(feeds[:4])}")
+                epss = self.epss_scores.get(cve)
+                epss_str = f" [EPSS {epss['epss']:.0%}]" if epss else ""
+                lines.append(f"      {cve}{epss_str} → {' | '.join(feeds[:4])}")
+
         if self.poc_available_cves:
-            lines.append(
-                "  ⚡ PoC/EXPLOIT PÚBLICO CONFIRMADO: "
-                + ", ".join(self.poc_available_cves[:20])
-            )
+            poc_with_epss = []
+            for cve in self.poc_available_cves[:20]:
+                epss = self.epss_scores.get(cve)
+                suffix = f" [EPSS {epss['epss']:.0%}]" if epss else ""
+                poc_with_epss.append(f"{cve}{suffix}")
+            lines.append("  ⚡ PoC/EXPLOIT PÚBLICO CONFIRMADO: " + ", ".join(poc_with_epss))
+
         if self.trending_actors:
             lines.append("  👁 ACTORES EN TENDENCIA (≥2 fuentes):")
             for actor, feeds in list(self.trending_actors.items())[:10]:
                 lines.append(f"      {actor} → {' | '.join(feeds[:4])}")
+
+        if self.corroborated_iocs:
+            lines.append("  🔗 IOCs CORROBORADOS en ≥2 fuentes independientes:")
+            for ioc, feeds in list(self.corroborated_iocs.items())[:20]:
+                lines.append(f"      {ioc} → {' | '.join(feeds[:4])}")
 
         lines += [
             "",
@@ -123,6 +143,7 @@ def _dedup(items: list[str]) -> list[str]:
 def build_correlation_context(
     summaries: list[ArticleSummary],
     kev_url: str = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    epss_url: str = "https://api.first.org/data/v1/epss",
     kev_timeout: int = 15,
 ) -> CorrelationContext:
     """
@@ -167,6 +188,19 @@ def build_correlation_context(
         if len(set(feeds)) >= 2
     }
 
+    # ── IOC correlation ──────────────────────────────────
+    ioc_map: dict[str, list[str]] = defaultdict(list)
+    for s in summaries:
+        for ioc in s.iocs:
+            ioc = ioc.strip()
+            if ioc and len(ioc) > 4:   # descartar valores triviales
+                ioc_map[ioc].append(s.feed_title)
+    ctx.corroborated_iocs = {
+        ioc: _dedup(feeds)
+        for ioc, feeds in ioc_map.items()
+        if len(set(feeds)) >= 2
+    }
+
     # ── CISA KEV lookup ──────────────────────────────────
     logger.info("  Consultando CISA KEV...")
     try:
@@ -185,10 +219,44 @@ def build_correlation_context(
     except Exception as e:
         logger.warning(f"  CISA KEV no disponible: {e}")
 
+    # ── EPSS lookup (FIRST.org) ──────────────────────────
+    all_cves = list(cve_map.keys())
+    if all_cves:
+        logger.info(f"  Consultando EPSS para {len(all_cves)} CVEs...")
+        try:
+            # API acepta hasta ~500 CVEs por request en el parámetro cve
+            chunk_size = 400
+            epss_data: dict[str, dict] = {}
+            for i in range(0, len(all_cves), chunk_size):
+                chunk = all_cves[i : i + chunk_size]
+                params = {"cve": ",".join(chunk), "scope": "time-series"}
+                r = requests.get(
+                    epss_url,
+                    params={"cve": ",".join(chunk)},
+                    timeout=kev_timeout,
+                )
+                r.raise_for_status()
+                for entry in r.json().get("data", []):
+                    cve_id = entry["cve"].upper()
+                    epss_data[cve_id] = {
+                        "epss": float(entry["epss"]),
+                        "percentile": float(entry["percentile"]),
+                    }
+            ctx.epss_scores = epss_data
+            ctx.epss_fetch_ok = True
+            high_epss = sum(1 for v in epss_data.values() if v["epss"] >= 0.5)
+            logger.info(
+                f"  EPSS: {len(epss_data)} scores obtenidos — "
+                f"{high_epss} con probabilidad ≥50%"
+            )
+        except Exception as e:
+            logger.warning(f"  EPSS no disponible: {e}")
+
     logger.info(
         f"  Correlaciones: {len(cve_map)} CVEs únicos | "
         f"{len(ctx.corroborated_cves)} corroborados | "
         f"{len(ctx.poc_available_cves)} con PoC | "
-        f"{len(ctx.trending_actors)} actores en tendencia"
+        f"{len(ctx.trending_actors)} actores en tendencia | "
+        f"{len(ctx.corroborated_iocs)} IOCs corroborados"
     )
     return ctx

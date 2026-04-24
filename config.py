@@ -91,6 +91,11 @@ OLLAMA_NUM_THREADS = 3   # Referencial, se configura en el LXC directamente
 MIN_CONTENT_LENGTH  = 200   # Descartar artículos con menos de N caracteres
 MIN_CVSS_FOR_HIGHLIGHT = 7.0  # Solo resaltar CVEs con CVSS ≥ este valor
 
+# Tokens máximos de contenido por artículo enviados a Stage 2.
+# Con Ollama (num_ctx=2048): máx ~800 (prompt + contenido + respuesta JSON deben caber).
+# Con cloud providers (OpenAI/Claude/Gemini): 2000-3000 para capturar IOCs y TTPs del cuerpo completo.
+ARTICLE_MAX_TOKENS = 800
+
 # Categorías del OPML a incluir (None = todas las 5 categorías)
 # Opciones: "Cibersecurity", "Hacking & Research", "Threat Intel", "Vulnerability", "LATAM"
 FEED_CATEGORIES = None
@@ -138,15 +143,17 @@ NO_SCRAPE_DOMAINS = {
 
 # CISA KEV — catálogo oficial de CVEs explotados activamente en producción.
 CISA_KEV_URL      = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-KEV_FETCH_TIMEOUT = 15   # segundos
+EPSS_API_URL      = "https://api.first.org/data/v1/epss"
+KEV_FETCH_TIMEOUT = 15   # segundos (aplica también al fetch de EPSS)
 
 # ─────────────────────────────────────────────
 # REPORTES
 # ─────────────────────────────────────────────
 
-# Tokens máximos para Stage 3 (con think=False todos los tokens van al reporte)
-# ~2500-3500 tokens para un informe normal; 6000 da margen en Patch Tuesday / días activos
-REPORT_MAX_TOKENS = 6000
+# Tokens máximos para Stage 3.
+# Con cloud providers (OpenAI/Claude/Gemini): 10000 da reportes detallados sin costo significativo.
+# Con Ollama CPU-only: bajar a 3500-4000 para no exceder el tiempo de generación.
+REPORT_MAX_TOKENS = 10000
 
 # True → genera vuln-briefing-* y threat-digest-* además del threat-briefing-* completo
 SPLIT_REPORTS = True

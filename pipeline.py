@@ -117,7 +117,7 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
             min_length=config.MIN_CONTENT_LENGTH,
             blocked_domains=config.NO_SCRAPE_DOMAINS,
         )
-        text = truncate_text(text, max_tokens_approx=800)
+        text = truncate_text(text, max_tokens_approx=config.ARTICLE_MAX_TOKENS)
         processed.append({
             "article_id":    article.id,
             "title":         article.title,
@@ -222,6 +222,7 @@ def stage25_correlate(summaries: list[ArticleSummary]) -> CorrelationContext:
     return build_correlation_context(
         summaries=summaries,
         kev_url=config.CISA_KEV_URL,
+        epss_url=config.EPSS_API_URL,
         kev_timeout=config.KEV_FETCH_TIMEOUT,
     )
 
