@@ -1,7 +1,5 @@
 """
 analyzer.py — Etapas 2 y 3 del pipeline.
-  - Etapa 2: resumen estructurado de cada artículo (qwen3.5:4b, think=False)
-  - Etapa 3: informe consolidado de threat intelligence (qwen3.5:9b, think=True)
 """
 
 import json
@@ -9,8 +7,6 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Optional, Union
-import ollama
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +33,7 @@ class ArticleSummary:
     affected_systems: list[str] = field(default_factory=list)
     summary: str = ""
     iocs: list[str] = field(default_factory=list)
-    error: Optional[str] = None
+    error: str | None = None
 
 
 _SEVERITY_SCORE: dict[str, int] = {
@@ -259,6 +255,7 @@ def _llm_chat(
 ) -> str:
     """Llamada LLM unificada para todos los proveedores. Devuelve texto limpio."""
     if provider == "ollama":
+        import ollama
         client = ollama.Client(host=ollama_host, timeout=timeout)
         options = _build_options(num_ctx, max_tokens, temperature, num_threads)
         response = client.chat(
@@ -392,6 +389,7 @@ def summarize_article(
 
 def unload_model(model: str, ollama_host: str) -> None:
     """Fuerza la descarga del modelo de RAM antes del swap a la siguiente etapa."""
+    import ollama
     try:
         client = ollama.Client(host=ollama_host)
         client.chat(
@@ -423,6 +421,7 @@ def generate_report(
 
     try:
         if provider == "ollama":
+            import ollama
             # Streaming para evitar timeout en generaciones largas en CPU-only.
             # timeout aplica entre chunks, no al total.
             client  = ollama.Client(host=ollama_host, timeout=timeout)

@@ -4,7 +4,6 @@ Usa trafilatura como motor principal con fallback a BeautifulSoup.
 """
 
 import logging
-import re
 import time
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup

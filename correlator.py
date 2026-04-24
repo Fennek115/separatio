@@ -10,11 +10,17 @@ Cruza CVEs, actores y feeds para detectar hechos verificables:
 La correlación es determinista: coincidencia exacta de IDs, sin inferencia.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 import requests
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from analyzer import ArticleSummary
 
 logger = logging.getLogger(__name__)
 
@@ -107,13 +113,7 @@ def _is_valid_cve(cve: str) -> bool:
 
 
 def _dedup(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for x in items:
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
+    return list(dict.fromkeys(items))
 
 
 # ─────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ def _dedup(items: list[str]) -> list[str]:
 # ─────────────────────────────────────────────────────────
 
 def build_correlation_context(
-    summaries: list,
+    summaries: list[ArticleSummary],
     kev_url: str = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
     kev_timeout: int = 15,
 ) -> CorrelationContext:

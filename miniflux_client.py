@@ -6,7 +6,6 @@ Obtiene artículos no leídos y los marca como leídos tras procesar.
 import requests
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ class MinifluxClient:
         resp.raise_for_status()
 
     def get_unread_articles(self, limit: int = 200,
-                            category_id: Optional[int] = None) -> list[Article]:
+                            category_id: int | None = None) -> list[Article]:
         """
         Obtiene artículos no leídos de Miniflux.
         Aplica paginación automática si hay más artículos que el límite de la API.

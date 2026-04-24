@@ -3,6 +3,7 @@ reporter.py — Renderiza el informe de threat intelligence a Markdown y HTML.
 """
 
 import os
+import re
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -111,7 +112,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="meta">Generado el {generated_at} · Pipeline de Threat Intelligence</div>
     {body}
     <div class="footer">
-        Informe generado automáticamente con Ollama ({total_articles} artículos de {total_feeds} fuentes)
+        Informe generado automáticamente · {provider} · {total_articles} artículos de {total_feeds} fuentes
     </div>
 </body>
 </html>"""
@@ -122,7 +123,6 @@ def markdown_to_html_body(markdown_text: str) -> str:
     Convierte Markdown básico a HTML sin dependencias externas.
     Soporta: encabezados, listas, código, negrita, cursiva, hr, tablas.
     """
-    import re
     lines = markdown_text.split("\n")
     html_lines = []
     list_tag: str | None = None   # "ul" | "ol" | None
@@ -222,7 +222,6 @@ def markdown_to_html_body(markdown_text: str) -> str:
 
 def _inline(text: str) -> str:
     """Procesa formato inline: negrita, cursiva, código, links."""
-    import re
     # Código inline
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     # Negrita
@@ -241,7 +240,6 @@ def split_report_sections(markdown: str) -> dict[str, str]:
     Retorna {"vulnerability": <md>, "threat_intel": <md>} si se encuentran marcadores,
     o {"full": <md>} como fallback para compatibilidad con el formato antiguo.
     """
-    import re
     vuln = re.search(
         r"===VULNERABILITY_BRIEFING===\s*\n(.*?)(?===THREAT_INTEL_DIGEST===|===END===)",
         markdown, re.DOTALL,
@@ -262,7 +260,8 @@ def split_report_sections(markdown: str) -> dict[str, str]:
 
 def _write_report_file(content: str, path: str, fmt: str,
                        date_str: str, generated_at: str,
-                       total_articles: int, total_feeds: int) -> None:
+                       total_articles: int, total_feeds: int,
+                       provider: str = "") -> None:
     if fmt == "md":
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -274,6 +273,7 @@ def _write_report_file(content: str, path: str, fmt: str,
             body=body,
             total_articles=total_articles,
             total_feeds=total_feeds,
+            provider=provider or "pipeline",
         )
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
@@ -282,7 +282,7 @@ def _write_report_file(content: str, path: str, fmt: str,
 def save_report(markdown_content: str, output_dir: str,
                 date_str: str, total_articles: int,
                 total_feeds: int, fmt: str = "both",
-                split: bool = True) -> dict[str, str]:
+                split: bool = True, provider: str = "") -> dict[str, str]:
     """
     Guarda el informe en Markdown y/o HTML.
     Si split=True y el contenido contiene marcadores de sección, genera archivos
@@ -313,31 +313,30 @@ def save_report(markdown_content: str, output_dir: str,
         if write_md:
             path = os.path.join(output_dir, f"{prefix}-{safe_date}.md")
             _write_report_file(content, path, "md", date_str, generated_at,
-                               total_articles, total_feeds)
+                               total_articles, total_feeds, provider)
             paths[f"{key}_markdown"] = path
             logger.info(f"Informe Markdown ({key}): {path}")
 
         if write_html:
             path = os.path.join(output_dir, f"{prefix}-{safe_date}.html")
             _write_report_file(content, path, "html", date_str, generated_at,
-                               total_articles, total_feeds)
+                               total_articles, total_feeds, provider)
             paths[f"{key}_html"] = path
             logger.info(f"Informe HTML ({key}): {path}")
 
     # Si se generaron secciones separadas, guardar también el informe completo
     # (sin marcadores) para compatibilidad con scripts externos
-    if "vulnerability" in sections and write_md:
+    if "vulnerability" in sections:
         combined = sections["vulnerability"] + "\n\n---\n\n" + sections["threat_intel"]
-        path = os.path.join(output_dir, f"threat-briefing-{safe_date}.md")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(combined)
-        paths["full_markdown"] = path
-
-    if "vulnerability" in sections and write_html:
-        combined = sections["vulnerability"] + "\n\n---\n\n" + sections["threat_intel"]
-        path = os.path.join(output_dir, f"threat-briefing-{safe_date}.html")
-        _write_report_file(combined, path, "html", date_str, generated_at,
-                           total_articles, total_feeds)
-        paths["full_html"] = path
+        if write_md:
+            path = os.path.join(output_dir, f"threat-briefing-{safe_date}.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(combined)
+            paths["full_markdown"] = path
+        if write_html:
+            path = os.path.join(output_dir, f"threat-briefing-{safe_date}.html")
+            _write_report_file(combined, path, "html", date_str, generated_at,
+                               total_articles, total_feeds, provider)
+            paths["full_html"] = path
 
     return paths

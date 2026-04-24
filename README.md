@@ -13,9 +13,9 @@ Runs fully local with Ollama by default. Optionally routes Stage 2 and Stage 3 t
 
 ## What it produces
 
-Two daily reports generated in Markdown and HTML:
+Two daily reports in Markdown and HTML:
 
-- **Vulnerability Briefing** — CVEs of the day, affected systems, CVSS context, CISA KEV correlation, patch priority ranking
+- **Vulnerability Briefing** — CVEs of the day, affected systems, CISA KEV correlation, patch priority ranking
 - **Threat Intelligence Digest** — APT activity, ransomware campaigns, actor tracking, LATAM context, executive summary
 
 ---
@@ -35,19 +35,17 @@ Miniflux RSS (unread articles, sorted by published_at desc)
   Truncated to ~800 tokens before Stage 2
 
      │  (PARALLEL_WORKERS=1, CPU-only)
-     ▼  Stage 2 — analyzer.py → qwen3.5:4b  (think=False, ~1.75 min/article on i7-10510U)
-  Extracts JSON: threat_type, severity, actors, CVEs, IOCs → ArticleSummary
+     ▼  Stage 2 — analyzer.py → LLM  (per-article JSON extraction)
+  Extracts: threat_type, severity, actors, CVEs, IOCs → ArticleSummary
   Cached to: reports/summaries-cache-YYYY-MM-DD.json
 
-     │  (unload_model: explicit keep_alive=0 to free RAM before model swap)
+     │  (Ollama only: explicit keep_alive=0 to free RAM before model swap)
      ▼  Stage 2.5 — correlator.py
   CVE deduplication across sources, CISA KEV lookup, PoC signal detection
 
-     ▼  Stage 3 — analyzer.py → qwen3.5:9b  (think=False, streaming)
+     ▼  Stage 3 — analyzer.py → LLM  (consolidated report)
   Pre-computed analytics injected into prompt:
     severity distribution, top CVEs by mention count, priority article list
-  This replaces what the model would reason about in <think>,
-  enabling think=False without quality loss
 
      ▼  reporter.py
   reports/vuln-briefing-YYYY-MM-DD.{md,html}
@@ -57,34 +55,144 @@ Miniflux RSS (unread articles, sorted by published_at desc)
 
 ---
 
-## Infrastructure
+## Prerequisites
 
-Runs on Proxmox with two LXC containers:
+- Python 3.10+
+- A running [Miniflux](https://miniflux.app/) instance with an API token
+- One of the following LLM backends (see [LLM providers](#llm-providers)):
+  - **Ollama** — local, fully private, CPU or GPU
+  - **Anthropic / OpenAI / Gemini** — API key required
+
+---
+
+## Installation
+
+### 1. Clone and set up the environment
+
+```bash
+git clone <repo-url> /opt/threat-pipeline
+cd /opt/threat-pipeline
+
+python3 -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+### 2. Configure
+
+Copy the default config and edit it:
+
+```bash
+cp config.py config.py.bak   # optional backup
+nano config.py
+```
+
+Minimum required settings:
+
+```python
+# Choose your LLM provider
+PROVIDER = "ollama"   # or: "claude" | "openai" | "gemini"
+
+# Miniflux connection
+MINIFLUX_URL       = "http://localhost:8080"
+MINIFLUX_API_TOKEN = "your-api-token"   # Settings → API Keys in Miniflux UI
+
+# If using Ollama
+OLLAMA_HOST   = "http://192.168.x.x:11434"
+SUMMARY_MODEL = "qwen3.5:4b"
+REPORT_MODEL  = "qwen3.5:9b"
+
+# If using a cloud provider — set the matching key
+ANTHROPIC_API_KEY = ""   # or set env var ANTHROPIC_API_KEY
+OPENAI_API_KEY    = ""   # or set env var OPENAI_API_KEY
+GEMINI_API_KEY    = ""   # or set env var GEMINI_API_KEY
+```
+
+> **Tip:** API keys can be set as environment variables instead of editing config.py. The config reads them via `os.getenv()`.
+
+### 3. Import feeds
+
+In Miniflux: **Settings → OPML → Import** → select `threat-analysis-feeds.opml`
+
+### 4. Verify connectivity
+
+```bash
+python setup_check.py
+```
+
+The checker is provider-aware: it verifies Ollama + models when `PROVIDER=ollama`, or the API key + package when using a cloud provider.
+
+### 5. Test run
+
+```bash
+python pipeline.py --dry-run          # fetch and extract only, no LLM calls
+python pipeline.py --limit 3          # full run with 3 articles
+```
+
+---
+
+## Proxmox / LXC setup (Ollama)
+
+This is the reference hardware setup. Skip this section if you are using a cloud provider.
+
+### Infrastructure
 
 | LXC | Role | Specs |
 |-----|------|-------|
 | 111 | Ollama (CPU-only) | 4 cores i7-10510U, 10 GB RAM |
 | 112 | Miniflux + Pipeline | RSS reader on port 8080 |
 
+### LXC 111 — Ollama
+
+Install Ollama:
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Configure the systemd override so Ollama binds to all interfaces:
+```bash
+mkdir -p /etc/systemd/system/ollama.service.d/
+cat > /etc/systemd/system/ollama.service.d/override.conf << 'EOF'
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_KEEP_ALIVE=10m"
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+EOF
+
+systemctl daemon-reload
+systemctl restart ollama
+```
+
+Pull the models:
+```bash
+ollama pull qwen3.5:4b
+ollama pull qwen3.5:9b
+```
+
 **Sequential model swap**: qwen3.5:4b (~3.2 GB, Stage 2) is explicitly unloaded via `keep_alive=0` before qwen3.5:9b (~7.2 GB, Stage 3) loads. Peak RAM: 7.2 GB — within the 10 GB LXC budget.
 
----
+### LXC 112 — Pipeline
 
-## Setup
-
+Install the pipeline:
 ```bash
+apt install python3 python3-venv python3-pip git -y
+git clone <repo-url> /opt/threat-pipeline
+cd /opt/threat-pipeline
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Edit `config.py` with your Miniflux connection:
+Edit `config.py`:
 ```python
-MINIFLUX_URL       = "http://localhost:8080"
-MINIFLUX_API_TOKEN = "your-api-token"   # Settings → API Keys in Miniflux UI
+PROVIDER     = "ollama"
+OLLAMA_HOST  = "http://192.168.x.x:11434"   # ← IP of LXC 111
+MINIFLUX_URL = "http://localhost:8080"        # Miniflux runs on the same LXC
+MINIFLUX_API_TOKEN = "your-api-token"
 ```
 
-Import feeds: Miniflux → Settings → OPML → Import `threat-analysis-feeds.opml`
-
-Verify connectivity:
+Verify:
 ```bash
 python setup_check.py
 ```
@@ -93,23 +201,15 @@ python setup_check.py
 
 ## LLM providers
 
-The pipeline supports four providers. Change `PROVIDER` in `config.py` and set the matching model names — everything else stays the same.
+Change `PROVIDER` in `config.py` and set the matching model names — everything else stays the same.
 
 ### Ollama (default — fully local)
-
-Requires a running Ollama instance (see Infrastructure above).
 
 ```python
 PROVIDER      = "ollama"
 SUMMARY_MODEL = "qwen3.5:4b"
 REPORT_MODEL  = "qwen3.5:9b"
-OLLAMA_HOST   = "http://<IP_LXC_111>:11434"
-```
-
-Pull the models once:
-```bash
-ollama pull qwen3.5:4b
-ollama pull qwen3.5:9b
+OLLAMA_HOST   = "http://<host>:11434"
 ```
 
 Timing on i7-10510U (CPU-only): ~1.75 min/article → 120 articles ≈ 3.5h total.
@@ -124,11 +224,8 @@ pip install anthropic
 PROVIDER          = "claude"
 SUMMARY_MODEL     = "claude-haiku-4-5-20251001"   # fast + cheap for per-article extraction
 REPORT_MODEL      = "claude-sonnet-4-6"            # quality report generation
-ANTHROPIC_API_KEY = "sk-ant-..."                   # or set env var ANTHROPIC_API_KEY
+ANTHROPIC_API_KEY = "sk-ant-..."                   # or env var ANTHROPIC_API_KEY
 ```
-
-Estimated cost for a 120-article run: ~$0.05–0.10 (Haiku for Stage 2, Sonnet for Stage 3).
-Stage 2: ~2 min total. Stage 3: ~30 sec.
 
 ### OpenAI
 
@@ -140,7 +237,7 @@ pip install openai
 PROVIDER       = "openai"
 SUMMARY_MODEL  = "gpt-4o-mini"   # Stage 2
 REPORT_MODEL   = "gpt-4o"        # Stage 3
-OPENAI_API_KEY = "sk-..."        # or set env var OPENAI_API_KEY
+OPENAI_API_KEY = "sk-..."        # or env var OPENAI_API_KEY
 ```
 
 ### Gemini (Google)
@@ -153,13 +250,13 @@ pip install google-generativeai
 PROVIDER       = "gemini"
 SUMMARY_MODEL  = "gemini-2.0-flash"   # Stage 2
 REPORT_MODEL   = "gemini-2.5-pro"     # Stage 3
-GEMINI_API_KEY = "AIza..."            # or set env var GEMINI_API_KEY
+GEMINI_API_KEY = "AIza..."            # or env var GEMINI_API_KEY
 ```
 
 ### Provider comparison
 
-| Provider | Stage 2 time (120 articles) | Stage 3 time | Privacy | Cost/run |
-|----------|-----------------------------|--------------|---------|----------|
+| Provider | Stage 2 (120 articles) | Stage 3 | Privacy | Approx. cost/run |
+|----------|------------------------|---------|---------|------------------|
 | Ollama | ~3.5h (CPU-only) | ~20–30 min | Full — data stays local | Free |
 | Claude | ~2 min | ~30 sec | Articles sent to Anthropic | ~$0.05–0.10 |
 | OpenAI | ~2 min | ~30 sec | Articles sent to OpenAI | ~$0.05–0.15 |
@@ -172,11 +269,11 @@ Cloud providers use direct API calls (no streaming). Ollama uses streaming in St
 ## Usage
 
 ```bash
-python pipeline.py                    # full run — all categories, up to MAX_ARTICLES
-python pipeline.py --limit 5          # quick end-to-end test (5 articles)
-python pipeline.py --dry-run          # Stage 1 only — fetch and extract, no Ollama calls
-python pipeline.py --report-only      # skip Stages 1–2, regenerate report from today's cache
-python pipeline.py --no-mark-read     # don't mark articles as read in Miniflux after processing
+python pipeline.py                              # full run
+python pipeline.py --limit 5                    # quick end-to-end test (5 articles)
+python pipeline.py --dry-run                    # Stage 1 only — no LLM calls
+python pipeline.py --report-only                # skip Stages 1–2, regenerate report from today's cache
+python pipeline.py --no-mark-read               # don't mark articles as read in Miniflux
 python pipeline.py --categories "Vulnerability"
 python pipeline.py --categories "Threat Intel,Cibersecurity"
 ```
@@ -186,19 +283,18 @@ python pipeline.py --categories "Threat Intel,Cibersecurity"
 | Flag | What it does |
 |------|-------------|
 | `--limit N` | Cap the run at N articles. Useful for testing without waiting 3+ hours. |
-| `--dry-run` | Runs Stage 1 (fetch + extract) but skips all Ollama calls. Reports are filled with `[DRY RUN]` placeholders. Good for verifying feed connectivity. |
-| `--report-only` | Skips Stages 1 and 2 entirely. Loads the existing `summaries-cache-YYYY-MM-DD.json` and re-runs Stage 3. Use this when you want to tweak the report prompt or if Stage 3 failed — no need to redo 3+ hours of per-article summaries. |
-| `--no-mark-read` | Processes articles normally but does not mark them as read in Miniflux. Articles will appear again on the next run. Useful for testing or re-processing. |
-| `--categories` | Comma-separated list of OPML category names to include. Overrides `FEED_CATEGORIES` in `config.py` at runtime — no file edit needed. See category rotation below. |
+| `--dry-run` | Runs Stage 1 (fetch + extract) but skips all LLM calls. Reports are filled with `[DRY RUN]` placeholders. Good for verifying feed connectivity. |
+| `--report-only` | Skips Stages 1 and 2 entirely. Loads `summaries-cache-YYYY-MM-DD.json` and re-runs Stage 3. Use this when tweaking the report prompt or if Stage 3 failed — no need to redo hours of per-article summaries. |
+| `--no-mark-read` | Processes articles normally but does not mark them as read in Miniflux. Useful for testing or re-processing. |
+| `--categories` | Comma-separated list of OPML category names. Overrides `FEED_CATEGORIES` in `config.py` at runtime. |
 
-### `--categories` and feed coverage
+### `--categories` and feed rotation
 
-With 39 feeds, `PER_FEED_LIMIT=10`, and `MAX_ARTICLES=120`, a single run covers roughly 12 feeds (~30% of the total). Running the same categories every day means the same feeds get processed repeatedly while others are skipped.
+With 39 feeds, `PER_FEED_LIMIT=10`, and `MAX_ARTICLES=120`, a single run covers roughly 12 feeds. Running the same categories every day means the same feeds get processed repeatedly while others are skipped.
 
-The `--categories` flag solves this by letting each cron job target a specific slice:
+The `--categories` flag enables day-by-day rotation for full weekly coverage:
 
 ```bash
-# Each job covers one category — different days, full weekly coverage
 python pipeline.py --categories "Vulnerability"
 python pipeline.py --categories "Threat Intel"
 python pipeline.py --categories "Cibersecurity"
@@ -206,11 +302,49 @@ python pipeline.py --categories "Hacking & Research,LATAM"
 ```
 
 Available category names (must match OPML exactly):
-- `Vulnerability`
-- `Threat Intel`
-- `Cibersecurity`
-- `Hacking & Research`
-- `LATAM`
+`Vulnerability` · `Threat Intel` · `Cibersecurity` · `Hacking & Research` · `LATAM`
+
+---
+
+## Cron (LXC 112)
+
+For CPU-only hardware (~1.75 min/article in Stage 2), rotating categories keeps each run within ~3.5h:
+
+```cron
+0 2 * * 1,3,5  root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Vulnerability" >> /var/log/threat-pipeline.log 2>&1
+0 2 * * 2,4    root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Threat Intel" >> /var/log/threat-pipeline.log 2>&1
+0 3 * * 6      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Cibersecurity" >> /var/log/threat-pipeline.log 2>&1
+0 3 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Hacking & Research,LATAM" >> /var/log/threat-pipeline.log 2>&1
+```
+
+For cloud providers (Stage 2 takes ~2 min total), a single daily cron at any hour covers all feeds.
+
+---
+
+## Configuration reference
+
+All settings live in `config.py`.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `PROVIDER` | `"ollama"` | `ollama` \| `claude` \| `openai` \| `gemini` |
+| `SUMMARY_MODEL` | `"qwen3.5:4b"` | Model for Stage 2 — set to match your provider |
+| `REPORT_MODEL` | `"qwen3.5:9b"` | Model for Stage 3 — set to match your provider |
+| `ANTHROPIC_API_KEY` | `""` | Required when `PROVIDER=claude` |
+| `OPENAI_API_KEY` | `""` | Required when `PROVIDER=openai` |
+| `GEMINI_API_KEY` | `""` | Required when `PROVIDER=gemini` |
+| `OLLAMA_HOST` | `"http://<IP>:11434"` | Required when `PROVIDER=ollama` |
+| `MINIFLUX_URL` | `"http://localhost:8080"` | Miniflux instance URL |
+| `MINIFLUX_API_TOKEN` | `""` | Preferred over username/password |
+| `MAX_ARTICLES` | `120` | Hard cap per run |
+| `PER_FEED_LIMIT` | `10` | Prevents high-volume feeds (MSRC: 2975 entries) from dominating |
+| `FEED_CATEGORIES` | `None` | List of category names, or `None` for all. Override with `--categories`. |
+| `PARALLEL_WORKERS` | `1` | Keep at 1 for CPU-only Ollama |
+| `SUMMARY_TIMEOUT` | `240` | Seconds per article (Stage 2) |
+| `REPORT_TIMEOUT` | `2400` | Seconds between stream chunks (Stage 3, Ollama only) |
+| `REPORT_MAX_TOKENS` | `6000` | Max output tokens for the report |
+| `SPLIT_REPORTS` | `True` | Generate separate vuln-briefing and threat-digest files |
+| `OUTPUT_FORMAT` | `"both"` | `"markdown"` \| `"html"` \| `"both"` |
 
 ---
 
@@ -222,7 +356,7 @@ Sources are selected by three criteria, in order:
 2. **Scrape-ability** — preference for full RSS content; title-only feeds included only when they provide unique CVE/exploit correlation signal (Exploit-DB, Sploitus, ZDI)
 3. **Signal uniqueness** — if two feeds cover the same stories, the lower-signal one is cut
 
-**39 curated sources** across 5 categories. The separatio was applied to the sources themselves:
+**39 curated sources** across 5 categories:
 
 | Category | Feeds | Cut | Reason |
 |----------|-------|-----|--------|
@@ -231,39 +365,3 @@ Sources are selected by three criteria, in order:
 | LATAM | 5 | 1 | Corporate IT news with minimal security signal |
 | Threat Intel | 12 | 5 | Overlapping coverage; weekly digest of sources already ingested directly |
 | Vulnerability | 9 | 3 | Blocked URLs; duplicated by CISA + Tenable + GitHub Security |
-
----
-
-## Category rotation (recommended cron on LXC 112)
-
-With CPU-only hardware (~1.75 min/article in Stage 2), full coverage requires rotating
-categories across days. Each run fits within ~3.5h and completes before 06:00:
-
-```cron
-0 2 * * 1,3,5  root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Vulnerability" >> /var/log/threat-pipeline.log 2>&1
-0 2 * * 2,4    root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Threat Intel" >> /var/log/threat-pipeline.log 2>&1
-0 3 * * 6      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Cibersecurity" >> /var/log/threat-pipeline.log 2>&1
-0 3 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Hacking & Research,LATAM" >> /var/log/threat-pipeline.log 2>&1
-```
-
----
-
-## Configuration
-
-Key variables in `config.py`:
-
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `PROVIDER` | `"ollama"` | `ollama` \| `claude` \| `openai` \| `gemini` |
-| `SUMMARY_MODEL` | `"qwen3.5:4b"` | Model for Stage 2 — set to match your provider |
-| `REPORT_MODEL` | `"qwen3.5:9b"` | Model for Stage 3 — set to match your provider |
-| `ANTHROPIC_API_KEY` | `""` | Required when `PROVIDER=claude` |
-| `OPENAI_API_KEY` | `""` | Required when `PROVIDER=openai` |
-| `GEMINI_API_KEY` | `""` | Required when `PROVIDER=gemini` |
-| `OLLAMA_HOST` | `http://<IP>:11434` | Required when `PROVIDER=ollama` |
-| `MINIFLUX_URL` | `http://localhost:8080` | Miniflux instance |
-| `MAX_ARTICLES` | 120 | Hard cap per run |
-| `PER_FEED_LIMIT` | 10 | Prevents high-volume feeds (MSRC: 2975 entries) from dominating |
-| `REPORT_THINKING` | False | Ollama only; pre-computed analytics injected instead |
-| `FEED_CATEGORIES` | None | Override with `--categories` CLI arg |
-| `PARALLEL_WORKERS` | 1 | Keep at 1 for CPU-only Ollama |

@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,8 @@ from extractor import extract_article_text, truncate_text
 from analyzer import ArticleSummary, summarize_article, generate_report, unload_model
 from correlator import build_correlation_context, CorrelationContext
 from reporter import save_report
+
+Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,18 +65,8 @@ def load_summaries_cache(date_str: str) -> list[ArticleSummary]:
     path = _cache_path(date_str)
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
-    summaries = []
-    for d in data:
-        s = ArticleSummary(
-            article_id=d["article_id"],
-            title=d["title"],
-            url=d["url"],
-            feed_title=d["feed_title"],
-            feed_category=d["feed_category"],
-            published_at=d["published_at"],
-        )
-        s.__dict__.update(d)
-        summaries.append(s)
+    known = ArticleSummary.__dataclass_fields__
+    summaries = [ArticleSummary(**{k: v for k, v in d.items() if k in known}) for d in data]
     logger.info(f"Cargados {len(summaries)} resúmenes del caché")
     return summaries
 
@@ -102,7 +95,6 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
         logger.info(f"Filtro por categorías: {before} → {len(articles)} artículos")
 
     if per_feed:
-        from collections import defaultdict
         counts: dict[str, int] = defaultdict(int)
         capped = []
         for a in articles:   # already sorted by published_at desc from Miniflux
@@ -166,11 +158,12 @@ def _summarize_one(item: dict, dry_run: bool) -> ArticleSummary:
         url=item["url"],
         published_at=item["published_at"],
         model=config.SUMMARY_MODEL,
-        ollama_host=config.OLLAMA_HOST,
+        ollama_host=getattr(config, "OLLAMA_HOST", ""),
         timeout=config.SUMMARY_TIMEOUT,
         thinking=config.SUMMARY_THINKING,
         num_ctx=config.SUMMARY_CTX,
-        num_threads=config.OLLAMA_NUM_THREADS,
+        num_threads=getattr(config, "OLLAMA_NUM_THREADS", 0),
+        max_retries=config.MAX_RETRIES,
         provider=config.PROVIDER,
     )
 
@@ -259,12 +252,12 @@ def stage3_report(summaries: list[ArticleSummary],
             summaries=summaries,
             date_str=date_str,
             model=config.REPORT_MODEL,
-            ollama_host=config.OLLAMA_HOST,
+            ollama_host=getattr(config, "OLLAMA_HOST", ""),
             language=config.REPORT_LANGUAGE,
             timeout=config.REPORT_TIMEOUT,
             thinking=config.REPORT_THINKING,
             num_ctx=config.REPORT_CTX,
-            num_threads=config.OLLAMA_NUM_THREADS,
+            num_threads=getattr(config, "OLLAMA_NUM_THREADS", 0),
             correlation=correlation,
             max_tokens=config.REPORT_MAX_TOKENS,
             provider=config.PROVIDER,
@@ -279,6 +272,7 @@ def stage3_report(summaries: list[ArticleSummary],
         total_feeds=total_feeds,
         fmt=config.OUTPUT_FORMAT,
         split=config.SPLIT_REPORTS,
+        provider=config.PROVIDER,
     )
 
 
