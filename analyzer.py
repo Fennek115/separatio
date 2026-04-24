@@ -122,9 +122,15 @@ def _build_pre_analysis(summaries: list[ArticleSummary]) -> str:
 
 def build_report_prompt(summaries: list[ArticleSummary],
                         date_str: str, language: str = "español",
-                        correlation=None, trending=None) -> str:
+                        correlation=None, trending=None,
+                        article_limit: int | None = None) -> str:
+    # summaries ya llegan ordenados por severity_score desc desde generate_report.
+    # Recortamos al límite para controlar el tamaño del prompt de Stage 3.
+    prompt_summaries = summaries[:article_limit] if article_limit else summaries
+    omitted = len(summaries) - len(prompt_summaries)
+
     items = []
-    for i, s in enumerate(summaries, 1):
+    for i, s in enumerate(prompt_summaries, 1):
         cves_str     = ", ".join(s.cves) if s.cves else "ninguno"
         actors_str   = ", ".join(s.actors) if s.actors else "no identificados"
         affected_str = ", ".join(s.affected_systems) if s.affected_systems else "no especificado"
@@ -141,7 +147,15 @@ def build_report_prompt(summaries: list[ArticleSummary],
 
     unique_feeds = len(set(s.feed_title for s in summaries))
 
+    # pre_analysis usa TODOS los artículos del día para estadísticas correctas,
+    # aunque el prompt solo envíe los top N al modelo.
     pre_analysis = _build_pre_analysis(summaries)
+    omitted_note = (
+        f"\n(Nota: se muestran los {len(prompt_summaries)} artículos de mayor severidad. "
+        f"Los {omitted} restantes —todos de severidad Media/Baja/Informativa— "
+        f"están incluidos en las estadísticas del bloque de pre-análisis.)\n"
+        if omitted else ""
+    )
 
     correlation_block = ""
     if correlation is not None and correlation.has_signals():
@@ -154,8 +168,8 @@ def build_report_prompt(summaries: list[ArticleSummary],
     return f"""Fecha del informe: {date_str}
 Total de artículos analizados: {len(summaries)} de {unique_feeds} fuentes
 {pre_analysis}
-{correlation_block}{trending_block}
-ARTÍCULOS ANALIZADOS:
+{correlation_block}{trending_block}{omitted_note}
+ARTÍCULOS ANALIZADOS ({len(prompt_summaries)} de {len(summaries)} — top por severidad):
 {chr(10).join(items)}
 
 ---
@@ -431,9 +445,10 @@ def generate_report(
     trending=None,
     max_tokens: int = 3500,
     provider: str = "ollama",
+    article_limit: int | None = None,
 ) -> str:
     sorted_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    prompt = build_report_prompt(sorted_summaries, date_str, language, correlation, trending)
+    prompt = build_report_prompt(sorted_summaries, date_str, language, correlation, trending, article_limit)
 
     try:
         if provider == "ollama":

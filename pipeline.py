@@ -289,6 +289,7 @@ def stage3_report(summaries: list[ArticleSummary],
             correlation=correlation,
             trending=trending,
             max_tokens=config.REPORT_MAX_TOKENS,
+            article_limit=getattr(config, "REPORT_ARTICLE_LIMIT", None),
             provider=config.PROVIDER,
         )
 

@@ -20,7 +20,8 @@ PROVIDER = "ollama"
 # Nombres de modelo según el proveedor elegido:
 #   ollama  → "qwen3.5:4b" / "qwen3.5:9b"
 #   claude  → "claude-haiku-4-5-20251001" / "claude-sonnet-4-6"
-#   openai  → "gpt-4o-mini" / "gpt-4o"
+#   openai  → "gpt-4.1-mini" / "gpt-4.1-mini"   ← recomendado: 200K TPM, 1M ctx, 32K output
+#             "gpt-4o-mini"  / "gpt-4o"          ← gpt-4o tiene 30K TPM en Tier 1 (insuficiente con 120 arts)
 #   gemini  → "gemini-2.0-flash" / "gemini-2.5-pro"
 
 # API keys — lee de variable de entorno o edita directamente aquí
@@ -159,9 +160,18 @@ TREND_WINDOW_DAYS = 14   # días de ventana para calcular tendencias
 # ─────────────────────────────────────────────
 
 # Tokens máximos para Stage 3.
-# Con cloud providers (OpenAI/Claude/Gemini): 10000 da reportes detallados sin costo significativo.
+# Con cloud providers (OpenAI/Claude/Gemini): 8000 da reportes detallados sin costo significativo.
 # Con Ollama CPU-only: bajar a 3500-4000 para no exceder el tiempo de generación.
-REPORT_MAX_TOKENS = 10000
+# Nota: gpt-4o en Tier 1 tiene 30K TPM — con 120 artículos el input ya son ~20K tokens,
+#       más los output_tokens supera el límite. Usar gpt-4.1-mini (200K TPM) para Stage 3.
+REPORT_MAX_TOKENS = 8000
+
+# Máximo de artículos enviados al prompt de Stage 3.
+# Stage 3 recibe los top N por severidad. Los artículos restantes están cubiertos
+# por el bloque de pre-análisis estadístico (distribución de severidad, tipos, etc.).
+# Con 80 artículos el input del prompt es ~15K tokens — manejable para cualquier provider.
+# None = sin límite (usa todos los artículos del día).
+REPORT_ARTICLE_LIMIT = 80
 
 # True → genera vuln-briefing-* y threat-digest-* además del threat-briefing-* completo
 SPLIT_REPORTS = True
