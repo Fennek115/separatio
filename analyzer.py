@@ -122,7 +122,7 @@ def _build_pre_analysis(summaries: list[ArticleSummary]) -> str:
 
 def build_report_prompt(summaries: list[ArticleSummary],
                         date_str: str, language: str = "español",
-                        correlation=None) -> str:
+                        correlation=None, trending=None) -> str:
     items = []
     for i, s in enumerate(summaries, 1):
         cves_str     = ", ".join(s.cves) if s.cves else "ninguno"
@@ -147,10 +147,14 @@ def build_report_prompt(summaries: list[ArticleSummary],
     if correlation is not None and correlation.has_signals():
         correlation_block = f"\n{correlation.format_for_prompt()}\n"
 
+    trending_block = ""
+    if trending is not None and trending.has_data():
+        trending_block = f"\n{trending.format_for_prompt()}\n"
+
     return f"""Fecha del informe: {date_str}
 Total de artículos analizados: {len(summaries)} de {unique_feeds} fuentes
 {pre_analysis}
-{correlation_block}
+{correlation_block}{trending_block}
 ARTÍCULOS ANALIZADOS:
 {chr(10).join(items)}
 
@@ -424,11 +428,12 @@ def generate_report(
     num_ctx: int = 16384,
     num_threads: int = 0,
     correlation=None,
+    trending=None,
     max_tokens: int = 3500,
     provider: str = "ollama",
 ) -> str:
     sorted_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    prompt = build_report_prompt(sorted_summaries, date_str, language, correlation)
+    prompt = build_report_prompt(sorted_summaries, date_str, language, correlation, trending)
 
     try:
         if provider == "ollama":

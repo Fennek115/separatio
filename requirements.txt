@@ -4,6 +4,10 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 
+# PDF export — requiere también dependencias del sistema en Debian/Ubuntu:
+#   apt install libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf2.0-0
+weasyprint>=62.0
+
 # Cloud providers — instala solo el que vayas a usar
 # pip install anthropic           # PROVIDER = "claude"
 # pip install openai              # PROVIDER = "openai"

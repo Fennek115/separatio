@@ -110,7 +110,7 @@ PER_FEED_LIMIT = 10
 # ─────────────────────────────────────────────
 OUTPUT_DIR = "./reports"
 
-# Formato de salida: "markdown", "html", o "both"
+# Formato de salida: "markdown" | "html" | "both" (md+html) | "pdf" | "all" (md+html+pdf)
 OUTPUT_FORMAT = "both"
 
 # Idioma del informe final
@@ -145,6 +145,14 @@ NO_SCRAPE_DOMAINS = {
 CISA_KEV_URL      = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 EPSS_API_URL      = "https://api.first.org/data/v1/epss"
 KEV_FETCH_TIMEOUT = 15   # segundos (aplica también al fetch de EPSS)
+
+# ─────────────────────────────────────────────
+# HISTÓRICO Y TRENDING (Stage 2.6)
+# ─────────────────────────────────────────────
+# Archivo JSON con registro compacto por día (~200 bytes/día, ~73KB/año).
+# El LLM solo recibe un bloque compacto de los últimos TREND_WINDOW_DAYS días.
+HISTORY_FILE      = "./reports/history.json"
+TREND_WINDOW_DAYS = 14   # días de ventana para calcular tendencias
 
 # ─────────────────────────────────────────────
 # REPORTES

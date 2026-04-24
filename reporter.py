@@ -1,5 +1,5 @@
 """
-reporter.py — Renderiza el informe de threat intelligence a Markdown y HTML.
+reporter.py — Renderiza el informe de threat intelligence a Markdown, HTML y PDF.
 """
 
 import os
@@ -9,6 +9,98 @@ from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+PDF_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Threat Intelligence Briefing — {date}</title>
+    <style>
+        @page {{
+            size: A4;
+            margin: 2cm 2.5cm;
+            @bottom-right {{ content: "Pág. " counter(page) " / " counter(pages); font-size: 8pt; color: #666; }}
+            @bottom-left  {{ content: "Threat Intelligence · {date}"; font-size: 8pt; color: #666; }}
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: "Segoe UI", Arial, sans-serif;
+            font-size: 10pt;
+            color: #1a1a1a;
+            line-height: 1.6;
+        }}
+        .cover {{
+            text-align: center;
+            padding-top: 4cm;
+            page-break-after: always;
+        }}
+        .cover h1 {{ font-size: 22pt; color: #1a56db; margin-bottom: 0.5rem; }}
+        .cover .subtitle {{ font-size: 12pt; color: #555; margin-bottom: 2rem; }}
+        .cover .meta {{ font-size: 9pt; color: #888; border-top: 1px solid #ddd; padding-top: 1rem; }}
+        h1 {{ font-size: 16pt; color: #1a56db; margin: 1.5rem 0 0.5rem;
+               border-bottom: 2px solid #1a56db; padding-bottom: 0.3rem; page-break-after: avoid; }}
+        h2 {{ font-size: 12pt; color: #1e293b; margin: 1.2rem 0 0.4rem;
+               border-left: 3px solid #1a56db; padding-left: 0.5rem; page-break-after: avoid; }}
+        h3 {{ font-size: 10pt; color: #334155; margin: 0.8rem 0 0.3rem; page-break-after: avoid; }}
+        p  {{ margin-bottom: 0.5rem; }}
+        ul, ol {{ padding-left: 1.2rem; margin-bottom: 0.5rem; }}
+        li {{ margin-bottom: 0.2rem; }}
+        code {{
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            border-radius: 3px;
+            padding: 0.05em 0.3em;
+            font-family: "Courier New", monospace;
+            font-size: 8.5pt;
+            color: #0f172a;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 0.8rem;
+            font-size: 9pt;
+            page-break-inside: avoid;
+        }}
+        th {{
+            background: #1e293b;
+            color: #f8fafc;
+            border: 1px solid #334155;
+            padding: 0.4rem 0.6rem;
+            text-align: left;
+            font-weight: 600;
+        }}
+        td {{
+            border: 1px solid #cbd5e1;
+            padding: 0.35rem 0.6rem;
+        }}
+        tr:nth-child(even) td {{ background: #f8fafc; }}
+        blockquote {{
+            border-left: 3px solid #94a3b8;
+            padding-left: 0.8rem;
+            color: #64748b;
+            margin-bottom: 0.5rem;
+        }}
+        hr {{ border: none; border-top: 1px solid #e2e8f0; margin: 1.2rem 0; }}
+        a {{ color: #1a56db; text-decoration: none; }}
+        strong {{ color: #0f172a; }}
+        .section-break {{ page-break-before: always; }}
+        .footer-note {{ margin-top: 1.5rem; font-size: 8pt; color: #94a3b8; text-align: center; }}
+    </style>
+</head>
+<body>
+    <div class="cover">
+        <div class="subtitle">THREAT INTELLIGENCE REPORT</div>
+        <h1>{date}</h1>
+        <div class="meta">
+            Generado el {generated_at}<br>
+            {total_articles} artículos · {total_feeds} fuentes · {provider}
+        </div>
+    </div>
+    {body}
+    <div class="footer-note">Informe generado automáticamente — uso interno</div>
+</body>
+</html>"""
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -258,6 +350,37 @@ def split_report_sections(markdown: str) -> dict[str, str]:
     return {"full": markdown}
 
 
+def _render_html(content: str, template: str, date_str: str,
+                 generated_at: str, total_articles: int,
+                 total_feeds: int, provider: str) -> str:
+    body = markdown_to_html_body(content)
+    return template.format(
+        date=date_str,
+        generated_at=generated_at,
+        body=body,
+        total_articles=total_articles,
+        total_feeds=total_feeds,
+        provider=provider or "pipeline",
+    )
+
+
+def _write_pdf(html_string: str, path: str) -> bool:
+    """Convierte HTML a PDF con weasyprint. Retorna False si no está instalado."""
+    try:
+        import weasyprint  # type: ignore
+        weasyprint.HTML(string=html_string).write_pdf(path)
+        return True
+    except ImportError:
+        logger.warning(
+            "weasyprint no está instalado — PDF omitido. "
+            "Instalar con: pip install weasyprint"
+        )
+        return False
+    except Exception as e:
+        logger.error(f"Error generando PDF: {e}")
+        return False
+
+
 def _write_report_file(content: str, path: str, fmt: str,
                        date_str: str, generated_at: str,
                        total_articles: int, total_feeds: int,
@@ -265,16 +388,13 @@ def _write_report_file(content: str, path: str, fmt: str,
     if fmt == "md":
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
+    elif fmt == "pdf":
+        html = _render_html(content, PDF_HTML_TEMPLATE, date_str,
+                            generated_at, total_articles, total_feeds, provider)
+        _write_pdf(html, path)
     else:
-        body = markdown_to_html_body(content)
-        html = HTML_TEMPLATE.format(
-            date=date_str,
-            generated_at=generated_at,
-            body=body,
-            total_articles=total_articles,
-            total_feeds=total_feeds,
-            provider=provider or "pipeline",
-        )
+        html = _render_html(content, HTML_TEMPLATE, date_str,
+                            generated_at, total_articles, total_feeds, provider)
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
 
@@ -304,8 +424,9 @@ def save_report(markdown_content: str, output_dir: str,
         "full":          "threat-briefing",
     }
 
-    write_md   = fmt in ("markdown", "both")
-    write_html = fmt in ("html", "both")
+    write_md   = fmt in ("markdown", "both", "all")
+    write_html = fmt in ("html", "both", "all")
+    write_pdf  = fmt in ("pdf", "all")
 
     for key, content in sections.items():
         prefix = file_prefixes[key]
@@ -324,6 +445,13 @@ def save_report(markdown_content: str, output_dir: str,
             paths[f"{key}_html"] = path
             logger.info(f"Informe HTML ({key}): {path}")
 
+        if write_pdf:
+            path = os.path.join(output_dir, f"{prefix}-{safe_date}.pdf")
+            _write_report_file(content, path, "pdf", date_str, generated_at,
+                               total_articles, total_feeds, provider)
+            paths[f"{key}_pdf"] = path
+            logger.info(f"Informe PDF ({key}): {path}")
+
     # Si se generaron secciones separadas, guardar también el informe completo
     # (sin marcadores) para compatibilidad con scripts externos
     if "vulnerability" in sections:
@@ -338,5 +466,11 @@ def save_report(markdown_content: str, output_dir: str,
             _write_report_file(combined, path, "html", date_str, generated_at,
                                total_articles, total_feeds, provider)
             paths["full_html"] = path
+        if write_pdf:
+            path = os.path.join(output_dir, f"threat-briefing-{safe_date}.pdf")
+            _write_report_file(combined, path, "pdf", date_str, generated_at,
+                               total_articles, total_feeds, provider)
+            paths["full_pdf"] = path
+            logger.info(f"Informe PDF (completo): {path}")
 
     return paths

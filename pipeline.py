@@ -24,6 +24,7 @@ from miniflux_client import MinifluxClient
 from extractor import extract_article_text, truncate_text
 from analyzer import ArticleSummary, summarize_article, generate_report, unload_model
 from correlator import build_correlation_context, CorrelationContext
+from history import load_history, append_daily_record, save_history, build_trending_context, TrendingContext
 from reporter import save_report
 
 Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
@@ -228,12 +229,38 @@ def stage25_correlate(summaries: list[ArticleSummary]) -> CorrelationContext:
 
 
 # ─────────────────────────────────────────────
+# ETAPA 2.6: HISTÓRICO Y TRENDING
+# ─────────────────────────────────────────────
+
+def stage26_history(
+    summaries: list[ArticleSummary],
+    date_str: str,
+    correlation: CorrelationContext,
+) -> TrendingContext:
+    logger.info("═" * 50)
+    logger.info("ETAPA 2.6: Actualizando historial y calculando tendencias")
+    logger.info("═" * 50)
+    history = load_history(config.HISTORY_FILE)
+    append_daily_record(history, date_str, summaries, correlation)
+    save_history(history, config.HISTORY_FILE)
+    trending = build_trending_context(history, date_str, config.TREND_WINDOW_DAYS)
+    logger.info(
+        f"  Historial: {len(history)} días registrados | "
+        f"Ventana: {trending.days_with_data}/{config.TREND_WINDOW_DAYS} días con datos | "
+        f"Actores persistentes: {len(trending.returning_actors)} | "
+        f"Actores nuevos: {len(trending.new_actors)}"
+    )
+    return trending
+
+
+# ─────────────────────────────────────────────
 # ETAPA 3: INFORME
 # ─────────────────────────────────────────────
 
 def stage3_report(summaries: list[ArticleSummary],
                   date_str: str,
                   correlation: CorrelationContext | None = None,
+                  trending: TrendingContext | None = None,
                   dry_run: bool = False) -> dict[str, str]:
     logger.info("═" * 50)
     logger.info(f"ETAPA 3: Generando informe con {config.REPORT_MODEL}")
@@ -260,6 +287,7 @@ def stage3_report(summaries: list[ArticleSummary],
             num_ctx=config.REPORT_CTX,
             num_threads=getattr(config, "OLLAMA_NUM_THREADS", 0),
             correlation=correlation,
+            trending=trending,
             max_tokens=config.REPORT_MAX_TOKENS,
             provider=config.PROVIDER,
         )
@@ -346,7 +374,8 @@ def main():
         unload_model(config.SUMMARY_MODEL, config.OLLAMA_HOST)
 
     correlation = stage25_correlate(summaries)
-    paths       = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
+    trending    = stage26_history(summaries, date_str, correlation)
+    paths       = stage3_report(summaries, date_str, correlation, trending, dry_run=args.dry_run)
     _print_result(paths)
 
 

@@ -13,10 +13,12 @@ Runs fully local with Ollama by default. Optionally routes Stage 2 and Stage 3 t
 
 ## What it produces
 
-Two daily reports in Markdown and HTML:
+Two daily reports in Markdown, HTML, and optionally PDF:
 
-- **Vulnerability Briefing** — CVEs of the day, affected systems, CISA KEV correlation, patch priority ranking
-- **Threat Intelligence Digest** — APT activity, ransomware campaigns, actor tracking, LATAM context, executive summary
+- **Vulnerability Briefing** — CVEs of the day, affected systems, CISA KEV + EPSS correlation, technical analysis per critical CVE, patch priority ranking
+- **Threat Intelligence Digest** — APT activity, ransomware campaigns, actor tracking (with persistence history), corroborated IOCs, LATAM context, executive summary
+
+Reports are generated as separate files (`vuln-briefing-*`, `threat-digest-*`) and a combined fallback (`threat-briefing-*`).
 
 ---
 
@@ -32,25 +34,44 @@ Miniflux RSS (unread articles, sorted by published_at desc)
     3. BeautifulSoup fallback
     4. Title-only last resort
   Per-feed cap (PER_FEED_LIMIT) — prevents high-volume feeds from monopolizing the batch
-  Truncated to ~800 tokens before Stage 2
+  Truncated to ARTICLE_MAX_TOKENS before Stage 2
+    → Ollama: 800 tokens (fits 2K context window)
+    → Cloud providers: 2000–3000 tokens (captures IOCs and TTPs from full article body)
 
      │  (PARALLEL_WORKERS=1, CPU-only)
      ▼  Stage 2 — analyzer.py → LLM  (per-article JSON extraction)
-  Extracts: threat_type, severity, actors, CVEs, IOCs → ArticleSummary
+  Extracts: threat_type, severity, actors, CVEs, affected_systems, IOCs → ArticleSummary
+  On JSONDecodeError: 1 automatic retry before discarding
   Cached to: reports/summaries-cache-YYYY-MM-DD.json
 
      │  (Ollama only: explicit keep_alive=0 to free RAM before model swap)
-     ▼  Stage 2.5 — correlator.py
-  CVE deduplication across sources, CISA KEV lookup, PoC signal detection
+     ▼  Stage 2.5 — correlator.py  (deterministic, no LLM)
+  - CVE deduplication: flags CVEs mentioned in ≥2 independent sources
+  - CISA KEV lookup: identifies CVEs with confirmed active exploitation
+  - EPSS lookup (FIRST.org): probability of exploitation in the next 30 days per CVE
+  - PoC signal detection: Exploit-DB / Sploitus / ZDI feed hits
+  - IOC correlation: IPs, domains, hashes seen in ≥2 independent sources
+  - Actor trending: threat groups mentioned in ≥2 independent sources
+
+     ▼  Stage 2.6 — history.py  (deterministic, no LLM)
+  - Appends compact daily record to reports/history.json (~200 bytes/day)
+  - Computes trending context over TREND_WINDOW_DAYS (default: 14 days):
+      returning actors (active in ≥2 days) vs. new actors (first appearance)
+      recurring CVEs (mentioned on ≥2 days this week)
+      threat type trend (% change vs. window average, only changes ≥20%)
+  - LLM always receives a fixed-size window block — prompt size never grows
 
      ▼  Stage 3 — analyzer.py → LLM  (consolidated report)
-  Pre-computed analytics injected into prompt:
-    severity distribution, top CVEs by mention count, priority article list
+  Pre-computed context injected into prompt:
+    - severity distribution, top CVEs by mention count, priority article list
+    - verified correlations: KEV + EPSS scores, corroborated CVEs, PoC signals
+    - corroborated IOCs, trending actors
+    - historical trending: persistent vs. emerging actors, recurring CVEs
 
      ▼  reporter.py
-  reports/vuln-briefing-YYYY-MM-DD.{md,html}
-  reports/threat-digest-YYYY-MM-DD.{md,html}
-  reports/threat-briefing-YYYY-MM-DD.{md,html}   ← combined fallback
+  reports/vuln-briefing-YYYY-MM-DD.{md,html,pdf}
+  reports/threat-digest-YYYY-MM-DD.{md,html,pdf}
+  reports/threat-briefing-YYYY-MM-DD.{md,html,pdf}   ← combined fallback
 ```
 
 ---
@@ -62,6 +83,7 @@ Miniflux RSS (unread articles, sorted by published_at desc)
 - One of the following LLM backends (see [LLM providers](#llm-providers)):
   - **Ollama** — local, fully private, CPU or GPU
   - **Anthropic / OpenAI / Gemini** — API key required
+- *(Optional)* `weasyprint` + system libraries for PDF export
 
 ---
 
@@ -79,16 +101,20 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+#### PDF export dependencies (optional)
 
-Copy the default config and edit it:
+`weasyprint` requires a few system libraries on Debian/Ubuntu:
 
 ```bash
-cp config.py config.py.bak   # optional backup
-nano config.py
+apt install libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf2.0-0
+pip install weasyprint
 ```
 
-Minimum required settings:
+If `weasyprint` is not installed, PDF output is silently skipped — all other formats still work.
+
+### 2. Configure
+
+Edit `config.py` with your environment:
 
 ```python
 # Choose your LLM provider
@@ -104,12 +130,19 @@ SUMMARY_MODEL = "qwen3.5:4b"
 REPORT_MODEL  = "qwen3.5:9b"
 
 # If using a cloud provider — set the matching key
-ANTHROPIC_API_KEY = ""   # or set env var ANTHROPIC_API_KEY
-OPENAI_API_KEY    = ""   # or set env var OPENAI_API_KEY
-GEMINI_API_KEY    = ""   # or set env var GEMINI_API_KEY
+ANTHROPIC_API_KEY = ""   # or env var ANTHROPIC_API_KEY
+OPENAI_API_KEY    = ""   # or env var OPENAI_API_KEY
+GEMINI_API_KEY    = ""   # or env var GEMINI_API_KEY
+
+# Article truncation — increase for cloud providers
+ARTICLE_MAX_TOKENS = 800     # Ollama: keep at 800 (fits 2K context)
+# ARTICLE_MAX_TOKENS = 2500  # Cloud: captures full IOC lists and TTP details
+
+# Output format
+OUTPUT_FORMAT = "both"   # or: "markdown" | "html" | "pdf" | "all" (md+html+pdf)
 ```
 
-> **Tip:** API keys can be set as environment variables instead of editing config.py. The config reads them via `os.getenv()`.
+> **Tip:** API keys can be set as environment variables. The config reads them via `os.getenv()`.
 
 ### 3. Import feeds
 
@@ -174,9 +207,11 @@ ollama pull qwen3.5:9b
 
 ### LXC 112 — Pipeline
 
-Install the pipeline:
 ```bash
 apt install python3 python3-venv python3-pip git -y
+# Optional: PDF export
+apt install libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf2.0-0
+
 git clone <repo-url> /opt/threat-pipeline
 cd /opt/threat-pipeline
 python3 -m venv venv
@@ -188,7 +223,7 @@ Edit `config.py`:
 ```python
 PROVIDER     = "ollama"
 OLLAMA_HOST  = "http://192.168.x.x:11434"   # ← IP of LXC 111
-MINIFLUX_URL = "http://localhost:8080"        # Miniflux runs on the same LXC
+MINIFLUX_URL = "http://localhost:8080"
 MINIFLUX_API_TOKEN = "your-api-token"
 ```
 
@@ -206,10 +241,11 @@ Change `PROVIDER` in `config.py` and set the matching model names — everything
 ### Ollama (default — fully local)
 
 ```python
-PROVIDER      = "ollama"
-SUMMARY_MODEL = "qwen3.5:4b"
-REPORT_MODEL  = "qwen3.5:9b"
-OLLAMA_HOST   = "http://<host>:11434"
+PROVIDER           = "ollama"
+SUMMARY_MODEL      = "qwen3.5:4b"
+REPORT_MODEL       = "qwen3.5:9b"
+OLLAMA_HOST        = "http://<host>:11434"
+ARTICLE_MAX_TOKENS = 800   # keep at 800 for 2K context window
 ```
 
 Timing on i7-10510U (CPU-only): ~1.75 min/article → 120 articles ≈ 3.5h total.
@@ -221,10 +257,12 @@ pip install anthropic
 ```
 
 ```python
-PROVIDER          = "claude"
-SUMMARY_MODEL     = "claude-haiku-4-5-20251001"   # fast + cheap for per-article extraction
-REPORT_MODEL      = "claude-sonnet-4-6"            # quality report generation
-ANTHROPIC_API_KEY = "sk-ant-..."                   # or env var ANTHROPIC_API_KEY
+PROVIDER           = "claude"
+SUMMARY_MODEL      = "claude-haiku-4-5-20251001"   # fast + cheap for per-article extraction
+REPORT_MODEL       = "claude-sonnet-4-6"            # quality report generation
+ANTHROPIC_API_KEY  = "sk-ant-..."                   # or env var ANTHROPIC_API_KEY
+ARTICLE_MAX_TOKENS = 2500
+REPORT_MAX_TOKENS  = 10000
 ```
 
 ### OpenAI
@@ -234,10 +272,12 @@ pip install openai
 ```
 
 ```python
-PROVIDER       = "openai"
-SUMMARY_MODEL  = "gpt-4o-mini"   # Stage 2
-REPORT_MODEL   = "gpt-4o"        # Stage 3
-OPENAI_API_KEY = "sk-..."        # or env var OPENAI_API_KEY
+PROVIDER           = "openai"
+SUMMARY_MODEL      = "gpt-4o-mini"   # Stage 2
+REPORT_MODEL       = "gpt-4o"        # Stage 3
+OPENAI_API_KEY     = "sk-..."        # or env var OPENAI_API_KEY
+ARTICLE_MAX_TOKENS = 2500
+REPORT_MAX_TOKENS  = 10000
 ```
 
 ### Gemini (Google)
@@ -247,10 +287,12 @@ pip install google-generativeai
 ```
 
 ```python
-PROVIDER       = "gemini"
-SUMMARY_MODEL  = "gemini-2.0-flash"   # Stage 2
-REPORT_MODEL   = "gemini-2.5-pro"     # Stage 3
-GEMINI_API_KEY = "AIza..."            # or env var GEMINI_API_KEY
+PROVIDER           = "gemini"
+SUMMARY_MODEL      = "gemini-2.0-flash"   # Stage 2
+REPORT_MODEL       = "gemini-2.5-pro"     # Stage 3
+GEMINI_API_KEY     = "AIza..."            # or env var GEMINI_API_KEY
+ARTICLE_MAX_TOKENS = 2500
+REPORT_MAX_TOKENS  = 10000
 ```
 
 ### Provider comparison
@@ -285,7 +327,7 @@ python pipeline.py --categories "Threat Intel,Cibersecurity"
 | `--limit N` | Cap the run at N articles. Useful for testing without waiting 3+ hours. |
 | `--dry-run` | Runs Stage 1 (fetch + extract) but skips all LLM calls. Reports are filled with `[DRY RUN]` placeholders. Good for verifying feed connectivity. |
 | `--report-only` | Skips Stages 1 and 2 entirely. Loads `summaries-cache-YYYY-MM-DD.json` and re-runs Stage 3. Use this when tweaking the report prompt or if Stage 3 failed — no need to redo hours of per-article summaries. |
-| `--no-mark-read` | Processes articles normally but does not mark them as read in Miniflux. Useful for testing or re-processing. |
+| `--no-mark-read` | Processes articles normally but does not mark them as read in Miniflux. Useful for testing or re-processing. Note: articles are marked as read by default after Stage 2 so they are not re-processed in the next daily run. |
 | `--categories` | Comma-separated list of OPML category names. Overrides `FEED_CATEGORIES` in `config.py` at runtime. |
 
 ### `--categories` and feed rotation
@@ -325,6 +367,8 @@ For cloud providers (Stage 2 takes ~2 min total), a single daily cron at any hou
 
 All settings live in `config.py`.
 
+### LLM
+
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `PROVIDER` | `"ollama"` | `ollama` \| `claude` \| `openai` \| `gemini` |
@@ -334,17 +378,49 @@ All settings live in `config.py`.
 | `OPENAI_API_KEY` | `""` | Required when `PROVIDER=openai` |
 | `GEMINI_API_KEY` | `""` | Required when `PROVIDER=gemini` |
 | `OLLAMA_HOST` | `"http://<IP>:11434"` | Required when `PROVIDER=ollama` |
-| `MINIFLUX_URL` | `"http://localhost:8080"` | Miniflux instance URL |
-| `MINIFLUX_API_TOKEN` | `""` | Preferred over username/password |
+
+### Fetch & extraction
+
+| Variable | Default | Notes |
+|----------|---------|-------|
 | `MAX_ARTICLES` | `120` | Hard cap per run |
 | `PER_FEED_LIMIT` | `10` | Prevents high-volume feeds (MSRC: 2975 entries) from dominating |
 | `FEED_CATEGORIES` | `None` | List of category names, or `None` for all. Override with `--categories`. |
+| `ARTICLE_MAX_TOKENS` | `800` | Content sent per article to Stage 2. Set to 2000–3000 for cloud providers to capture full IOC lists. |
+| `MIN_CONTENT_LENGTH` | `200` | Discard articles with fewer than N characters of extractable content |
 | `PARALLEL_WORKERS` | `1` | Keep at 1 for CPU-only Ollama |
+
+### Timeouts
+
+| Variable | Default | Notes |
+|----------|---------|-------|
 | `SUMMARY_TIMEOUT` | `240` | Seconds per article (Stage 2) |
 | `REPORT_TIMEOUT` | `2400` | Seconds between stream chunks (Stage 3, Ollama only) |
-| `REPORT_MAX_TOKENS` | `6000` | Max output tokens for the report |
-| `SPLIT_REPORTS` | `True` | Generate separate vuln-briefing and threat-digest files |
-| `OUTPUT_FORMAT` | `"both"` | `"markdown"` \| `"html"` \| `"both"` |
+| `REPORT_MAX_TOKENS` | `10000` | Max output tokens for the report. Use 3500–4000 for Ollama CPU-only. |
+
+### Correlations (Stage 2.5)
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `CISA_KEV_URL` | CISA feed URL | CVEs with confirmed active exploitation |
+| `EPSS_API_URL` | FIRST.org API | Exploitation probability scores — no API key required |
+| `KEV_FETCH_TIMEOUT` | `15` | Seconds for KEV and EPSS lookups |
+
+### Historical trending (Stage 2.6)
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `HISTORY_FILE` | `"./reports/history.json"` | Compact daily records (~200 bytes/day, ~73 KB/year). Never needs rotation. |
+| `TREND_WINDOW_DAYS` | `14` | Days of history used to compute trending. The LLM always receives a fixed-size block regardless of total history length. |
+
+### Output
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `OUTPUT_DIR` | `"./reports"` | Directory for all output files |
+| `OUTPUT_FORMAT` | `"both"` | `"markdown"` \| `"html"` \| `"both"` (md+html) \| `"pdf"` \| `"all"` (md+html+pdf) |
+| `SPLIT_REPORTS` | `True` | Generate separate `vuln-briefing-*` and `threat-digest-*` files |
+| `REPORT_LANGUAGE` | `"español"` | Language for the generated report |
 
 ---
 
