@@ -14,6 +14,10 @@ venv/
 
 # Windows/WSL artifacts
 *.Zone.Identifier
+*:Zone.Identifier
+
+# Output files (demos go in reports/ manually)
+output-threatintel/
 
 # Editor
 .vscode/

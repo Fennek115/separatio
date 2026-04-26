@@ -100,15 +100,15 @@ class CorrelationContext:
                 epss = self.epss_scores.get(cve)
                 suffix = f" [EPSS {epss['epss']:.0%}]" if epss else ""
                 poc_with_epss.append(f"{cve}{suffix}")
-            lines.append("  ⚡ PoC/EXPLOIT PÚBLICO CONFIRMADO: " + ", ".join(poc_with_epss))
+            lines.append("  [PoC] EXPLOIT PÚBLICO CONFIRMADO: " + ", ".join(poc_with_epss))
 
         if self.trending_actors:
-            lines.append("  👁 ACTORES EN TENDENCIA (≥2 fuentes):")
+            lines.append("  ACTORES EN TENDENCIA (>=2 fuentes):")
             for actor, feeds in list(self.trending_actors.items())[:10]:
                 lines.append(f"      {actor} → {' | '.join(feeds[:4])}")
 
         if self.corroborated_iocs:
-            lines.append("  🔗 IOCs CORROBORADOS en ≥2 fuentes independientes:")
+            lines.append("  IOCs CORROBORADOS en >=2 fuentes independientes:")
             for ioc, feeds in list(self.corroborated_iocs.items())[:20]:
                 lines.append(f"      {ioc} → {' | '.join(feeds[:4])}")
 

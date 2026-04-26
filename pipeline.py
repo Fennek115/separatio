@@ -9,20 +9,22 @@ Uso:
 """
 
 import argparse
+import csv
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import config
 from miniflux_client import MinifluxClient
 from extractor import extract_article_text, truncate_text
-from analyzer import ArticleSummary, summarize_article, generate_report, unload_model
+from analyzer import ArticleSummary, summarize_article, generate_report, generate_weekly_report, unload_model
 from correlator import build_correlation_context, CorrelationContext
 from history import load_history, append_daily_record, save_history, build_trending_context, TrendingContext
 from reporter import save_report
@@ -70,6 +72,184 @@ def load_summaries_cache(date_str: str) -> list[ArticleSummary]:
     summaries = [ArticleSummary(**{k: v for k, v in d.items() if k in known}) for d in data]
     logger.info(f"Cargados {len(summaries)} resúmenes del caché")
     return summaries
+
+
+# ─────────────────────────────────────────────
+# DEDUPLICACIÓN SEMÁNTICA (post Stage 2)
+# ─────────────────────────────────────────────
+
+def dedup_by_cves(
+    summaries: list[ArticleSummary],
+    min_shared: int = 2,
+    min_jaccard: float = 0.4,
+) -> list[ArticleSummary]:
+    """Fusiona resúmenes que cubren el mismo grupo de CVEs."""
+    sorted_idx = sorted(range(len(summaries)), key=lambda i: -summaries[i].severity_score)
+    absorbed: set[int] = set()
+
+    for pos_a, idx_a in enumerate(sorted_idx):
+        if idx_a in absorbed or not summaries[idx_a].cves:
+            continue
+        cves_a = set(summaries[idx_a].cves)
+        for idx_b in sorted_idx[pos_a + 1:]:
+            if idx_b in absorbed or not summaries[idx_b].cves:
+                continue
+            cves_b = set(summaries[idx_b].cves)
+            shared = len(cves_a & cves_b)
+            if shared < min_shared:
+                continue
+            if shared / len(cves_a | cves_b) >= min_jaccard:
+                absorbed.add(idx_b)
+                s_a, s_b = summaries[idx_a], summaries[idx_b]
+                s_a.iocs   = list({*s_a.iocs,   *s_b.iocs})[:20]
+                s_a.actors = list({*s_a.actors, *s_b.actors})[:10]
+
+    result = [s for i, s in enumerate(summaries) if i not in absorbed]
+    if absorbed:
+        logger.info(
+            f"Dedup semantica (CVE): {len(summaries)} → {len(result)} "
+            f"resumenes ({len(absorbed)} consolidados)"
+        )
+    return result
+
+
+# ─────────────────────────────────────────────
+# EXPORT IOCs
+# ─────────────────────────────────────────────
+
+def _detect_ioc_type(ioc: str) -> str:
+    ioc = ioc.strip()
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}(:\d+)?$", ioc):
+        return "ip"
+    if re.match(r"^[0-9a-fA-F]{64}$", ioc):
+        return "sha256"
+    if re.match(r"^[0-9a-fA-F]{40}$", ioc):
+        return "sha1"
+    if re.match(r"^[0-9a-fA-F]{32}$", ioc):
+        return "md5"
+    if ioc.startswith(("http://", "https://")):
+        return "url"
+    if re.match(r"^[a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}$", ioc):
+        return "domain"
+    return "other"
+
+
+def export_iocs(
+    summaries: list[ArticleSummary], date_str: str, output_dir: str
+) -> dict[str, str]:
+    """Exporta todos los IOCs únicos de los resúmenes a CSV y JSON."""
+    rows = []
+    for s in summaries:
+        for ioc in s.iocs:
+            rows.append({
+                "date":     date_str,
+                "ioc":      ioc.strip(),
+                "type":     _detect_ioc_type(ioc),
+                "severity": s.severity,
+                "title":    s.title,
+                "feed":     s.feed_title,
+                "cves":     "|".join(s.cves),
+            })
+
+    if not rows:
+        return {}
+
+    seen: set[str] = set()
+    unique = [r for r in rows if r["ioc"] not in seen and not seen.add(r["ioc"])]  # type: ignore[func-returns-value]
+
+    safe_date = date_str.replace(" ", "_").replace("/", "-")
+    paths: dict[str, str] = {}
+
+    csv_path = os.path.join(output_dir, f"iocs-{safe_date}.csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["date", "ioc", "type", "severity", "title", "feed", "cves"]
+        )
+        writer.writeheader()
+        writer.writerows(unique)
+    paths["iocs_csv"] = csv_path
+
+    by_type: dict[str, list] = defaultdict(list)
+    for row in unique:
+        by_type[row["type"]].append(row)
+
+    json_path = os.path.join(output_dir, f"iocs-{safe_date}.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(dict(by_type), f, ensure_ascii=False, indent=2)
+    paths["iocs_json"] = json_path
+
+    logger.info(f"IOCs exportados: {len(unique)} unicos → {csv_path}")
+    return paths
+
+
+# ─────────────────────────────────────────────
+# RESUMEN SEMANAL
+# ─────────────────────────────────────────────
+
+def run_weekly(days: int = 7) -> None:
+    """Carga los últimos N días de caché y genera un briefing semanal."""
+    today    = datetime.now().date()
+    iso      = datetime.now().isocalendar()
+    week_label = f"{iso.year}-W{iso.week:02d}"
+    date_str   = datetime.now().strftime("%Y-%m-%d")
+
+    logger.info(f"\n{'═' * 50}")
+    logger.info(f"  WEEKLY PIPELINE — {week_label}")
+    logger.info(f"{'═' * 50}\n")
+
+    all_summaries: list[ArticleSummary] = []
+    dates_found:   list[str]            = []
+
+    for i in range(days):
+        day     = today - timedelta(days=i)
+        day_str = day.strftime("%Y-%m-%d")
+        cache   = _cache_path(day_str)
+        if os.path.exists(cache):
+            day_summaries = load_summaries_cache(day_str)
+            all_summaries.extend(day_summaries)
+            dates_found.append(day_str)
+
+    if not all_summaries:
+        logger.error("No se encontraron cachés en los últimos %d días.", days)
+        return
+
+    dates_found.sort()
+    logger.info(
+        f"  {len(all_summaries)} resumenes de {len(dates_found)} días: "
+        f"{dates_found[0]} → {dates_found[-1]}"
+    )
+
+    markdown = generate_weekly_report(
+        summaries=all_summaries,
+        dates=dates_found,
+        week_label=week_label,
+        model=config.REPORT_MODEL,
+        ollama_host=getattr(config, "OLLAMA_HOST", ""),
+        language=config.REPORT_LANGUAGE,
+        timeout=config.REPORT_TIMEOUT,
+        thinking=config.REPORT_THINKING,
+        num_ctx=config.REPORT_CTX,
+        num_threads=getattr(config, "OLLAMA_NUM_THREADS", 0),
+        max_tokens=config.REPORT_MAX_TOKENS,
+        provider=config.PROVIDER,
+    )
+
+    total_feeds = len(set(s.feed_title for s in all_summaries))
+    paths = save_report(
+        markdown_content=markdown,
+        output_dir=config.OUTPUT_DIR,
+        date_str=week_label,
+        total_articles=len(all_summaries),
+        total_feeds=total_feeds,
+        fmt=config.OUTPUT_FORMAT,
+        split=False,
+        provider=config.PROVIDER,
+        filename_prefix="weekly-briefing",
+    )
+
+    ioc_paths = export_iocs(all_summaries, week_label, config.OUTPUT_DIR)
+    paths.update(ioc_paths)
+    _print_result(paths)
 
 
 # ─────────────────────────────────────────────
@@ -289,9 +469,9 @@ def stage3_report(summaries: list[ArticleSummary],
     if dry_run:
         markdown = (
             "===VULNERABILITY_BRIEFING===\n"
-            f"# 🔒 Vulnerability Briefing — {date_str}\n\n[DRY RUN]\n\n"
+            f"# Vulnerability Briefing — {date_str}\n\n[DRY RUN]\n\n"
             "===THREAT_INTEL_DIGEST===\n"
-            f"# 🕵️ Threat Intelligence Digest — {date_str}\n\n[DRY RUN]\n\n"
+            f"# Threat Intelligence Digest — {date_str}\n\n[DRY RUN]\n\n"
             "===END==="
         )
     else:
@@ -346,12 +526,20 @@ def main():
                         help='Categorías a procesar, separadas por coma. '
                              'Ej: --categories "Vulnerability,Threat Intel". '
                              'Sobreescribe FEED_CATEGORIES en config.py.')
+    parser.add_argument("--weekly",      action="store_true",
+                        help="Generar resumen semanal desde los últimos 7 días de caché")
+    parser.add_argument("--weekly-days", type=int, default=7,
+                        help="Días a incluir en el resumen semanal (default: 7)")
     args = parser.parse_args()
 
     if args.categories:
         config.FEED_CATEGORIES = [c.strip() for c in args.categories.split(",")]
 
     Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+
+    if args.weekly:
+        run_weekly(days=args.weekly_days)
+        return
 
     date_str = datetime.now().strftime("%Y-%m-%d")
     logger.info(f"\n{'═' * 50}")
@@ -362,9 +550,11 @@ def main():
 
     if args.report_only:
         logger.info("Modo --report-only: cargando resúmenes desde caché...")
-        summaries    = load_summaries_cache(date_str)
-        correlation  = stage25_correlate(summaries)
-        paths        = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
+        summaries   = load_summaries_cache(date_str)
+        ioc_paths   = export_iocs(summaries, date_str, config.OUTPUT_DIR)
+        correlation = stage25_correlate(summaries)
+        paths       = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
+        paths.update(ioc_paths)
         _print_result(paths)
         return
 
@@ -386,7 +576,9 @@ def main():
         return
 
     summaries = stage2_summarize(articles, dry_run=args.dry_run)
+    summaries = dedup_by_cves(summaries)
     save_summaries_cache(summaries, date_str)
+    ioc_paths = export_iocs(summaries, date_str, config.OUTPUT_DIR)
 
     if config.MARK_AS_READ and not args.no_mark_read:
         client.mark_as_read([a["article_id"] for a in articles])
@@ -397,6 +589,7 @@ def main():
     correlation = stage25_correlate(summaries)
     trending    = stage26_history(summaries, date_str, correlation)
     paths       = stage3_report(summaries, date_str, correlation, trending, dry_run=args.dry_run)
+    paths.update(ioc_paths)
     _print_result(paths)
 
 

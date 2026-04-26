@@ -13,12 +13,17 @@ Runs fully local with Ollama by default. Optionally routes Stage 2 and Stage 3 t
 
 ## What it produces
 
-Two daily reports in Markdown, HTML, and optionally PDF:
+**Daily reports** in Markdown, HTML, and optionally PDF (set `OUTPUT_FORMAT = "all"`):
 
-- **Vulnerability Briefing** — CVEs of the day, affected systems, CISA KEV + EPSS correlation, technical analysis per critical CVE, patch priority ranking
-- **Threat Intelligence Digest** — APT activity, ransomware campaigns, actor tracking (with persistence history), corroborated IOCs, LATAM context, executive summary
+- **Vulnerability Briefing** (`vuln-briefing-*`) — CVEs of the day, affected systems, CISA KEV + EPSS correlation, technical analysis per critical CVE, patch priority ranking
+- **Threat Intelligence Digest** (`threat-digest-*`) — APT activity, ransomware campaigns, actor tracking (with persistence history), corroborated IOCs, LATAM context, executive summary
+- **IOC Export** (`iocs-YYYY-MM-DD.csv` + `.json`) — all IOCs extracted from the day's articles, typed (ip / domain / sha256 / sha1 / md5 / url) and attributed to source
 
-Reports are generated as separate files (`vuln-briefing-*`, `threat-digest-*`) and a combined fallback (`threat-briefing-*`).
+**Weekly digest** (run with `--weekly`):
+
+- **Weekly Briefing** (`weekly-briefing-YYYY-WXX.*`) — week-over-week CVE trends, most active threat actors, dominant TTPs, LATAM context, strategic recommendations
+
+The combined daily fallback (`threat-briefing-*`) is also always generated alongside the split files.
 
 ---
 
@@ -42,7 +47,14 @@ Miniflux RSS (unread articles, sorted by published_at desc)
      ▼  Stage 2 — analyzer.py → LLM  (per-article JSON extraction)
   Extracts: threat_type, severity, actors, CVEs, affected_systems, IOCs → ArticleSummary
   On JSONDecodeError: 1 automatic retry before discarding
+
+     ▼  Semantic dedup (pipeline.py, no LLM)
+  Groups summaries that share ≥2 CVEs with Jaccard similarity ≥0.4
+  Keeps the highest-severity entry per group; merges IOCs and actors
+  Reduces Stage 3 prompt size when the same CVE is covered by multiple feeds
+
   Cached to: reports/summaries-cache-YYYY-MM-DD.json
+  IOC export: reports/iocs-YYYY-MM-DD.{csv,json}
 
      │  (Ollama only: explicit keep_alive=0 to free RAM before model swap)
      ▼  Stage 2.5 — correlator.py  (deterministic, no LLM)
@@ -72,6 +84,13 @@ Miniflux RSS (unread articles, sorted by published_at desc)
   reports/vuln-briefing-YYYY-MM-DD.{md,html,pdf}
   reports/threat-digest-YYYY-MM-DD.{md,html,pdf}
   reports/threat-briefing-YYYY-MM-DD.{md,html,pdf}   ← combined fallback
+  reports/iocs-YYYY-MM-DD.{csv,json}
+
+─────────── Weekly (--weekly) ───────────
+  Loads last N days of summaries-cache-*.json
+     ▼  analyzer.py → LLM (single consolidated prompt, no split)
+  reports/weekly-briefing-YYYY-WXX.{md,html,pdf}
+  reports/iocs-YYYY-WXX.{csv,json}
 ```
 
 ---
@@ -167,23 +186,26 @@ python pipeline.py --limit 3          # full run with 3 articles
 
 ## Proxmox / LXC setup (Ollama)
 
-This is the reference hardware setup. Skip this section if you are using a cloud provider.
+This is the reference hardware setup using three dedicated LXC containers on Proxmox. Skip this section if you are using a cloud provider.
 
 ### Infrastructure
 
-| LXC | Role | Specs |
-|-----|------|-------|
-| 111 | Ollama (CPU-only) | 4 cores i7-10510U, 10 GB RAM |
-| 112 | Miniflux + Pipeline | RSS reader on port 8080 |
+| Container | Role | Notes |
+|-----------|------|-------|
+| ollama | Ollama inference server | 10 GB RAM minimum for qwen3.5:9b (~7.2 GB peak) |
+| miniflux | Miniflux RSS reader | port 8080 |
+| pipeline | Debian — runs this codebase | talks to the other two over the local network |
 
-### LXC 111 — Ollama
+### ollama container
 
-Install Ollama:
+Use the community-scripts one-liner from the Proxmox host shell:
+
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/ct/ollama.sh)"
 ```
 
-Configure the systemd override so Ollama binds to all interfaces:
+After creation, configure the systemd override so Ollama binds to all interfaces (not just localhost):
+
 ```bash
 mkdir -p /etc/systemd/system/ollama.service.d/
 cat > /etc/systemd/system/ollama.service.d/override.conf << 'EOF'
@@ -193,8 +215,7 @@ Environment="OLLAMA_KEEP_ALIVE=10m"
 Environment="OLLAMA_MAX_LOADED_MODELS=1"
 EOF
 
-systemctl daemon-reload
-systemctl restart ollama
+systemctl daemon-reload && systemctl restart ollama
 ```
 
 Pull the models:
@@ -203,28 +224,44 @@ ollama pull qwen3.5:4b
 ollama pull qwen3.5:9b
 ```
 
-**Sequential model swap**: qwen3.5:4b (~3.2 GB, Stage 2) is explicitly unloaded via `keep_alive=0` before qwen3.5:9b (~7.2 GB, Stage 3) loads. Peak RAM: 7.2 GB — within the 10 GB LXC budget.
+**Sequential model swap**: qwen3.5:4b (~3.2 GB, Stage 2) is explicitly unloaded via `keep_alive=0` before qwen3.5:9b (~7.2 GB, Stage 3) loads. Peak RAM usage: ~7.2 GB.
 
-### LXC 112 — Pipeline
+### miniflux container
+
+Use the community-scripts one-liner from the Proxmox host shell:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/ct/miniflux.sh)"
+```
+
+After setup, open the Miniflux UI, go to **Settings → API Keys** and create a token for the pipeline. Then import the feed list: **Settings → OPML → Import** → select `threat-analysis-feeds.opml`.
+
+### pipeline container
+
+A standard Debian LXC. Install the pipeline:
 
 ```bash
 apt install python3 python3-venv python3-pip git -y
-# Optional: PDF export
+# Optional: PDF export system libraries
 apt install libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf2.0-0
+# Optional: better PDF typography
+apt install fonts-ibm-plex
 
 git clone <repo-url> /opt/threat-pipeline
 cd /opt/threat-pipeline
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+# Optional: PDF export
+pip install weasyprint
 ```
 
-Edit `config.py`:
+Edit `config.py` with the IPs of the other two containers:
 ```python
-PROVIDER     = "ollama"
-OLLAMA_HOST  = "http://192.168.x.x:11434"   # ← IP of LXC 111
-MINIFLUX_URL = "http://localhost:8080"
-MINIFLUX_API_TOKEN = "your-api-token"
+PROVIDER           = "ollama"
+OLLAMA_HOST        = "http://<ollama-container-ip>:11434"
+MINIFLUX_URL       = "http://<miniflux-container-ip>:8080"
+MINIFLUX_API_TOKEN = "your-api-token"   # from Miniflux Settings → API Keys
 ```
 
 Verify:
@@ -318,6 +355,8 @@ python pipeline.py --report-only                # skip Stages 1–2, regenerate 
 python pipeline.py --no-mark-read               # don't mark articles as read in Miniflux
 python pipeline.py --categories "Vulnerability"
 python pipeline.py --categories "Threat Intel,Cibersecurity"
+python pipeline.py --weekly                     # generate weekly digest from last 7 days of cache
+python pipeline.py --weekly --weekly-days 5     # use last 5 days instead
 ```
 
 ### Flag reference
@@ -326,9 +365,11 @@ python pipeline.py --categories "Threat Intel,Cibersecurity"
 |------|-------------|
 | `--limit N` | Cap the run at N articles. Useful for testing without waiting 3+ hours. |
 | `--dry-run` | Runs Stage 1 (fetch + extract) but skips all LLM calls. Reports are filled with `[DRY RUN]` placeholders. Good for verifying feed connectivity. |
-| `--report-only` | Skips Stages 1 and 2 entirely. Loads `summaries-cache-YYYY-MM-DD.json` and re-runs Stage 3. Use this when tweaking the report prompt or if Stage 3 failed — no need to redo hours of per-article summaries. |
+| `--report-only` | Skips Stages 1 and 2 entirely. Loads `summaries-cache-YYYY-MM-DD.json` and re-runs Stage 3. Also re-exports the IOC files for the day. Use this when tweaking the report prompt or if Stage 3 failed. |
 | `--no-mark-read` | Processes articles normally but does not mark them as read in Miniflux. Useful for testing or re-processing. Note: articles are marked as read by default after Stage 2 so they are not re-processed in the next daily run. |
 | `--categories` | Comma-separated list of OPML category names. Overrides `FEED_CATEGORIES` in `config.py` at runtime. |
+| `--weekly` | Loads the last 7 days of `summaries-cache-*.json` files and generates a consolidated weekly digest. Does not fetch or call the per-article model — only Stage 3 runs. Also exports a weekly IOC file. |
+| `--weekly-days N` | Override the number of days for `--weekly` (default: 7). |
 
 ### `--categories` and feed rotation
 
@@ -348,7 +389,7 @@ Available category names (must match OPML exactly):
 
 ---
 
-## Cron (LXC 112)
+## Cron (pipeline container)
 
 For CPU-only hardware (~1.75 min/article in Stage 2), rotating categories keeps each run within ~3.5h:
 
@@ -357,6 +398,8 @@ For CPU-only hardware (~1.75 min/article in Stage 2), rotating categories keeps 
 0 2 * * 2,4    root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Threat Intel" >> /var/log/threat-pipeline.log 2>&1
 0 3 * * 6      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Cibersecurity" >> /var/log/threat-pipeline.log 2>&1
 0 3 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Hacking & Research,LATAM" >> /var/log/threat-pipeline.log 2>&1
+# Weekly digest every Sunday at 08:00 (after the daily cron has run)
+0 8 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --weekly >> /var/log/threat-pipeline.log 2>&1
 ```
 
 For cloud providers (Stage 2 takes ~2 min total), a single daily cron at any hour covers all feeds.
@@ -421,6 +464,20 @@ All settings live in `config.py`.
 | `OUTPUT_FORMAT` | `"both"` | `"markdown"` \| `"html"` \| `"both"` (md+html) \| `"pdf"` \| `"all"` (md+html+pdf) |
 | `SPLIT_REPORTS` | `True` | Generate separate `vuln-briefing-*` and `threat-digest-*` files |
 | `REPORT_LANGUAGE` | `"español"` | Language for the generated report |
+
+IOC files (`iocs-YYYY-MM-DD.csv` and `.json`) are always written regardless of `OUTPUT_FORMAT`. The CSV has columns: `date, ioc, type, severity, title, feed, cves`. The JSON groups IOCs by type (`ip`, `domain`, `sha256`, `sha1`, `md5`, `url`, `other`).
+
+#### PDF export
+
+Set `OUTPUT_FORMAT = "all"` and install the system libraries on the server:
+
+```bash
+apt install fonts-ibm-plex   # optional — improves PDF typography (IBM Plex Sans/Mono)
+apt install libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf2.0-0
+pip install weasyprint
+```
+
+The PDF template uses a violet palette (`#7c3aed`) with `TLP:WHITE` labeling in the footer of every page. Without `fonts-ibm-plex` it falls back to Liberation Sans / DejaVu Sans (already installed as weasyprint dependencies).
 
 ---
 

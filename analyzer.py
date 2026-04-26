@@ -177,43 +177,43 @@ Genera DOS informes separados en {language}. Usa EXACTAMENTE estos marcadores de
 
 ===VULNERABILITY_BRIEFING===
 
-# 🔒 Vulnerability Briefing — {date_str}
+# Vulnerability Briefing — {date_str}
 
 ## Resumen de Vulnerabilidades
 (3 párrafos: (1) panorama del día — total de CVEs, distribución de severidad, fuentes principales; (2) CVEs con explotación activa confirmada o alta probabilidad, con contexto de por qué son críticos; (3) urgencia de parcheo y ventana de exposición típica para estas vulnerabilidades)
 
-## ⚠️ CVEs Críticos y Altos
+## CVEs Críticos y Altos
 (Tabla con TODOS los CVEs Críticos y Altos reales mencionados en los artículos. Columnas: Sistema Afectado | CVE | CVSS/Severidad | Explotabilidad | Vector de Ataque | Acción Inmediata)
 
-## 🔬 Análisis Técnico de Vulnerabilidades Prioritarias
+## Análisis Técnico de Vulnerabilidades Prioritarias
 (Para cada CVE crítico: párrafo de 3-4 oraciones explicando el vector técnico de explotación, condiciones necesarias, impacto concreto si se explota, y si hay evidencia de explotación in-the-wild)
 
-## 🔑 Parches Prioritarios
+## Parches Prioritarios
 (Lista ordenada por urgencia. Para cada ítem: sistema, CVE, razón específica de prioridad, y enlace de referencia si está disponible en los datos)
 
 ===THREAT_INTEL_DIGEST===
 
-# 🕵️ Threat Intelligence Digest — {date_str}
+# Threat Intelligence Digest — {date_str}
 
 ## Resumen Ejecutivo
 (3-4 párrafos: (1) panorama general del día con nivel de alerta; (2) tendencias dominantes observadas en TTPs y tipos de amenaza; (3) actores más activos y sus objetivos; (4) recomendación estratégica para equipos de seguridad basada en los patrones del día)
 
-## 🔴 Amenazas Críticas y Altas
+## Amenazas Críticas y Altas
 (Por cada amenaza Crítica o Alta: párrafo con título en negrita, descripción técnica del ataque o campaña incluyendo TTPs/MITRE cuando aplique, sistemas o sectores objetivo, indicadores de compromiso disponibles, y nivel de madurez/sofisticación del actor)
 
-## 👤 Actividad de Actores de Amenaza
+## Actividad de Actores de Amenaza
 (Por cada actor mencionado explícitamente: párrafo con nombre, atribución conocida (país/grupo), TTPs característicos observados en esta campaña, objetivos o víctimas reportadas, y nivel de confianza en la atribución)
 
-## 🦠 Indicadores de Compromiso (IOCs)
+## Indicadores de Compromiso (IOCs)
 (Si hay IOCs en los artículos: tabla o lista agrupada por tipo — IPs maliciosas | Dominios C2 | Hashes de malware | URLs de distribución. Solo IOCs explícitamente mencionados en las fuentes)
 
-## 🌎 Contexto Regional LATAM
+## Contexto Regional LATAM
 (Amenazas o incidentes con impacto en América Latina. Si los hay: detallar qué países, sectores afectados, y qué medidas tomar. Si no hay impacto directo, analizar qué amenazas del día tienen mayor probabilidad de propagarse a la región y por qué.)
 
-## 📋 Resumen por Categoría
+## Resumen por Categoria
 (Tabla: Categoría | Cantidad | Severidad Máxima | Tendencia vs. día típico)
 
-## ✅ Acciones Recomendadas
+## Acciones Recomendadas
 (5-7 acciones concretas y priorizadas para equipos de seguridad, ordenadas por urgencia. Para cada acción: qué hacer, por qué es urgente, y métricas de éxito o criterio de cierre)
 
 ===END===
@@ -496,3 +496,124 @@ def generate_report(
     except Exception as e:
         logger.error(f"Error generando informe: {e}")
         return f"# Error al generar el informe\n\n{e}"
+
+
+def build_weekly_prompt(
+    summaries: list[ArticleSummary],
+    dates: list[str],
+    week_label: str,
+    language: str = "español",
+) -> str:
+    from collections import Counter
+
+    start_date = dates[0] if dates else ""
+    end_date   = dates[-1] if dates else ""
+
+    sev_order = ["Crítica", "Alta", "Media", "Baja", "Informativa"]
+    sev_dist  = Counter(s.severity for s in summaries)
+    sev_line  = " | ".join(f"{s}: {sev_dist[s]}" for s in sev_order if sev_dist.get(s))
+
+    cve_counts   = Counter(cve for s in summaries for cve in s.cves)
+    actor_counts = Counter(a for s in summaries for a in s.actors)
+    type_counts  = Counter(s.threat_type for s in summaries if s.threat_type)
+
+    top_cves   = ", ".join(f"{c} ({n}x)" for c, n in cve_counts.most_common(15)) or "ninguno"
+    top_actors = ", ".join(f"{a} ({n}x)" for a, n in actor_counts.most_common(10)) or "ninguno"
+    top_types  = ", ".join(f"{t} ({n})" for t, n in type_counts.most_common(6))
+
+    all_iocs = list({ioc for s in summaries for ioc in s.iocs})[:30]
+
+    # Muestra hasta 40 resúmenes de mayor severidad
+    top_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)[:40]
+    items = []
+    for i, s in enumerate(top_summaries, 1):
+        cves_str = ", ".join(s.cves) if s.cves else "ninguno"
+        items.append(
+            f"[{i}] [{s.severity}] [{s.threat_type}] {s.title[:80]}\n"
+            f"    Fuente: {s.feed_title} | Fecha: {s.published_at[:10]}\n"
+            f"    CVEs: {cves_str}"
+        )
+
+    return f"""Eres un analista senior de threat intelligence elaborando el resumen semanal consolidado.
+
+SEMANA: {week_label} ({start_date} → {end_date}) — {len(dates)} días analizados
+TOTAL DE ARTÍCULOS: {len(summaries)}
+DISTRIBUCIÓN DE SEVERIDAD: {sev_line}
+CVEs MÁS FRECUENTES: {top_cves}
+ACTORES MÁS ACTIVOS: {top_actors}
+TIPOS DE AMENAZA DOMINANTES: {top_types}
+IOCs RELEVANTES: {', '.join(all_iocs[:20]) or 'ninguno'}
+
+ARTÍCULOS MÁS RELEVANTES DE LA SEMANA:
+{chr(10).join(items)}
+
+---
+Genera el informe semanal en {language}. Usa este formato exacto:
+
+# Weekly Threat Intelligence Digest — {week_label}
+
+## Resumen Ejecutivo
+(3-4 párrafos: panorama general de la semana, nivel de alerta global, comparativa implícita con una semana típica, y recomendación estratégica principal)
+
+## CVEs Prioritarios de la Semana
+(Tabla: CVE | Sistemas Afectados | CVSS/Severidad | Frecuencia en fuentes | Estado de explotación | Acción)
+
+## Actores de Amenaza Activos
+(Por actor con ≥2 apariciones: nombre, tipo/origen, campañas observadas esta semana, TTPs, objetivos)
+
+## Tendencias y Patrones
+(Qué tipos de ataque dominaron la semana, qué sectores fueron más atacados, patrones de TTP emergentes o recurrentes)
+
+## IOCs de la Semana
+(Lista consolidada de IOCs más significativos agrupados por tipo)
+
+## Contexto Regional LATAM
+(Amenazas con impacto en América Latina esta semana; si no hay directas, qué amenazas de la semana tienen mayor probabilidad de afectar la región)
+
+## Recomendaciones para la Próxima Semana
+(5 acciones priorizadas basadas en las tendencias observadas)
+
+REGLAS:
+- No inventes datos. Usa solo lo presente en los artículos.
+- Prioriza lo que apareció en múltiples fuentes o tuvo alta severidad.
+- Escribe para un CISO que tiene 5 minutos para leer el informe.
+---
+*Fuentes: {len(summaries)} artículos de {len(set(s.feed_title for s in summaries))} feeds — {len(dates)} días*
+"""
+
+
+def generate_weekly_report(
+    summaries: list[ArticleSummary],
+    dates: list[str],
+    week_label: str,
+    model: str,
+    ollama_host: str,
+    language: str = "español",
+    timeout: int = 300,
+    thinking: bool = True,
+    num_ctx: int = 16384,
+    num_threads: int = 0,
+    max_tokens: int = 4000,
+    provider: str = "ollama",
+) -> str:
+    prompt = build_weekly_prompt(summaries, dates, week_label, language)
+
+    try:
+        result = _llm_chat(
+            system=REPORT_SYSTEM_PROMPT,
+            user=prompt,
+            provider=provider,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0.3,
+            ollama_host=ollama_host,
+            timeout=timeout,
+            thinking=thinking,
+            num_ctx=num_ctx,
+            num_threads=num_threads,
+        )
+        logger.info(f"  Informe semanal generado ({provider})")
+        return result
+    except Exception as e:
+        logger.error(f"Error generando informe semanal: {e}")
+        return f"# Error al generar el informe semanal\n\n{e}"

@@ -10,6 +10,18 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+_EMOJI_RE = re.compile(
+    u"[\U00002600-\U000027BF"
+    u"\U0001F300-\U0001F9FF"
+    u"\U0001FA00-\U0001FAFF"
+    u"♀-♂"
+    u"️‍]+",
+    flags=re.UNICODE,
+)
+
+def _strip_emoji(text: str) -> str:
+    return _EMOJI_RE.sub("", text)
+
 
 PDF_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
@@ -17,88 +29,203 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <title>Threat Intelligence Briefing — {date}</title>
     <style>
+        /*
+         * Fuentes recomendadas en el servidor (LXC 112):
+         *   apt install fonts-ibm-plex
+         * Sin ellas usa Liberation Sans / DejaVu como fallback.
+         */
         @page {{
             size: A4;
-            margin: 2cm 2.5cm;
-            @bottom-right {{ content: "Pág. " counter(page) " / " counter(pages); font-size: 8pt; color: #666; }}
-            @bottom-left  {{ content: "Threat Intelligence · {date}"; font-size: 8pt; color: #666; }}
+            margin: 2.2cm 2.5cm 2cm 2.5cm;
+            @bottom-right {{
+                content: counter(page) " / " counter(pages);
+                font-size: 7.5pt;
+                color: #9ca3af;
+                font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
+            }}
+            @bottom-left {{
+                content: "Threat Intelligence  ·  {date}  ·  TLP:WHITE";
+                font-size: 7.5pt;
+                color: #9ca3af;
+                font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
+            }}
+        }}
+        @page:first {{
+            @bottom-right {{ content: none; }}
+            @bottom-left  {{ content: none; }}
         }}
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{
-            font-family: "Segoe UI", Arial, sans-serif;
+            font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
             font-size: 10pt;
-            color: #1a1a1a;
-            line-height: 1.6;
+            color: #111827;
+            line-height: 1.65;
         }}
+
+        /* ── Portada ── */
         .cover {{
-            text-align: center;
-            padding-top: 4cm;
+            padding-top: 7cm;
+            padding-bottom: 4cm;
             page-break-after: always;
         }}
-        .cover h1 {{ font-size: 22pt; color: #1a56db; margin-bottom: 0.5rem; }}
-        .cover .subtitle {{ font-size: 12pt; color: #555; margin-bottom: 2rem; }}
-        .cover .meta {{ font-size: 9pt; color: #888; border-top: 1px solid #ddd; padding-top: 1rem; }}
-        h1 {{ font-size: 16pt; color: #1a56db; margin: 1.5rem 0 0.5rem;
-               border-bottom: 2px solid #1a56db; padding-bottom: 0.3rem; page-break-after: avoid; }}
-        h2 {{ font-size: 12pt; color: #1e293b; margin: 1.2rem 0 0.4rem;
-               border-left: 3px solid #1a56db; padding-left: 0.5rem; page-break-after: avoid; }}
-        h3 {{ font-size: 10pt; color: #334155; margin: 0.8rem 0 0.3rem; page-break-after: avoid; }}
-        p  {{ margin-bottom: 0.5rem; }}
-        ul, ol {{ padding-left: 1.2rem; margin-bottom: 0.5rem; }}
-        li {{ margin-bottom: 0.2rem; }}
+        .cover-rule {{
+            width: 2.8cm;
+            height: 4px;
+            background: #7c3aed;
+            margin-bottom: 1.4rem;
+        }}
+        .cover-label {{
+            font-size: 7pt;
+            font-weight: 700;
+            letter-spacing: 0.22em;
+            color: #7c3aed;
+            text-transform: uppercase;
+            margin-bottom: 0.7rem;
+        }}
+        .cover h1 {{
+            font-size: 27pt;
+            font-weight: 700;
+            color: #1e1b4b;
+            line-height: 1.12;
+            margin-bottom: 0.35rem;
+        }}
+        .cover-date {{
+            font-size: 13pt;
+            color: #4b5563;
+            margin-bottom: 3rem;
+        }}
+        .cover-meta {{
+            font-size: 8.5pt;
+            color: #6b7280;
+            border-top: 1px solid #e5e7eb;
+            padding-top: 0.9rem;
+            line-height: 2;
+        }}
+        .cover-tlp {{
+            display: inline-block;
+            border: 1px solid #c4b5fd;
+            color: #6d28d9;
+            font-size: 7pt;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            padding: 0.2em 0.65em;
+            border-radius: 2px;
+            margin-top: 1.6rem;
+        }}
+
+        /* ── Encabezados ── */
+        h1 {{
+            font-size: 15pt;
+            font-weight: 700;
+            color: #1e1b4b;
+            margin: 2rem 0 0.5rem;
+            padding-bottom: 0.4rem;
+            border-bottom: 2px solid #7c3aed;
+            page-break-after: avoid;
+        }}
+        h2 {{
+            font-size: 11pt;
+            font-weight: 600;
+            color: #1e1b4b;
+            margin: 1.4rem 0 0.4rem;
+            padding-left: 0.65rem;
+            border-left: 3px solid #7c3aed;
+            page-break-after: avoid;
+        }}
+        h3 {{
+            font-size: 10pt;
+            font-weight: 600;
+            color: #374151;
+            margin: 1rem 0 0.3rem;
+            page-break-after: avoid;
+        }}
+        h4 {{
+            font-size: 9.5pt;
+            font-weight: 600;
+            color: #4b5563;
+            margin: 0.7rem 0 0.2rem;
+        }}
+
+        /* ── Cuerpo ── */
+        p  {{ margin-bottom: 0.55rem; }}
+        ul, ol {{ padding-left: 1.3rem; margin-bottom: 0.6rem; }}
+        li {{ margin-bottom: 0.25rem; }}
+        strong {{ color: #111827; font-weight: 600; }}
+        a  {{ color: #6d28d9; text-decoration: none; }}
+        hr {{ border: none; border-top: 1px solid #e5e7eb; margin: 1.3rem 0; }}
+
+        /* ── Código ── */
         code {{
-            background: #f1f5f9;
-            border: 1px solid #e2e8f0;
+            font-family: "IBM Plex Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
+            font-size: 8.5pt;
+            background: #f5f3ff;
+            border: 1px solid #ddd6fe;
             border-radius: 3px;
             padding: 0.05em 0.3em;
-            font-family: "Courier New", monospace;
-            font-size: 8.5pt;
-            color: #0f172a;
+            color: #4c1d95;
         }}
+        pre {{
+            font-family: "IBM Plex Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
+            font-size: 8.5pt;
+            background: #faf5ff;
+            border: 1px solid #ddd6fe;
+            border-left: 3px solid #7c3aed;
+            border-radius: 3px;
+            padding: 0.8rem 1rem;
+            margin-bottom: 0.8rem;
+            page-break-inside: avoid;
+        }}
+
+        /* ── Tablas ── */
         table {{
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 0.8rem;
-            font-size: 9pt;
+            margin-bottom: 0.9rem;
+            font-size: 8.5pt;
             page-break-inside: avoid;
         }}
         th {{
-            background: #1e293b;
-            color: #f8fafc;
-            border: 1px solid #334155;
-            padding: 0.4rem 0.6rem;
+            background: #1e1b4b;
+            color: #f5f3ff;
+            border: 1px solid #312e81;
+            padding: 0.45rem 0.65rem;
             text-align: left;
             font-weight: 600;
+            font-size: 7.5pt;
+            letter-spacing: 0.05em;
         }}
         td {{
-            border: 1px solid #cbd5e1;
-            padding: 0.35rem 0.6rem;
+            border: 1px solid #e5e7eb;
+            padding: 0.4rem 0.65rem;
+            vertical-align: top;
         }}
-        tr:nth-child(even) td {{ background: #f8fafc; }}
+        tr:nth-child(even) td {{ background: #faf5ff; }}
+
+        /* ── Cita ── */
         blockquote {{
-            border-left: 3px solid #94a3b8;
+            border-left: 3px solid #c4b5fd;
             padding-left: 0.8rem;
-            color: #64748b;
-            margin-bottom: 0.5rem;
+            color: #6b7280;
+            font-style: italic;
+            margin-bottom: 0.6rem;
         }}
-        hr {{ border: none; border-top: 1px solid #e2e8f0; margin: 1.2rem 0; }}
-        a {{ color: #1a56db; text-decoration: none; }}
-        strong {{ color: #0f172a; }}
         .section-break {{ page-break-before: always; }}
-        .footer-note {{ margin-top: 1.5rem; font-size: 8pt; color: #94a3b8; text-align: center; }}
     </style>
 </head>
 <body>
     <div class="cover">
-        <div class="subtitle">THREAT INTELLIGENCE REPORT</div>
-        <h1>{date}</h1>
-        <div class="meta">
-            Generado el {generated_at}<br>
-            {total_articles} artículos · {total_feeds} fuentes · {provider}
+        <div class="cover-rule"></div>
+        <div class="cover-label">Daily Briefing</div>
+        <h1>Threat Intelligence<br>Report</h1>
+        <div class="cover-date">{date}</div>
+        <div class="cover-meta">
+            Generado: {generated_at}<br>
+            Articulos analizados: {total_articles} &nbsp;·&nbsp; Fuentes: {total_feeds}<br>
+            Modelo: {provider}
         </div>
+        <div class="cover-tlp">TLP:WHITE</div>
     </div>
     {body}
-    <div class="footer-note">Informe generado automáticamente — uso interno</div>
 </body>
 </html>"""
 
@@ -385,6 +512,7 @@ def _write_report_file(content: str, path: str, fmt: str,
                        date_str: str, generated_at: str,
                        total_articles: int, total_feeds: int,
                        provider: str = "") -> None:
+    content = _strip_emoji(content)
     if fmt == "md":
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -402,12 +530,14 @@ def _write_report_file(content: str, path: str, fmt: str,
 def save_report(markdown_content: str, output_dir: str,
                 date_str: str, total_articles: int,
                 total_feeds: int, fmt: str = "both",
-                split: bool = True, provider: str = "") -> dict[str, str]:
+                split: bool = True, provider: str = "",
+                filename_prefix: str | None = None) -> dict[str, str]:
     """
     Guarda el informe en Markdown y/o HTML.
     Si split=True y el contenido contiene marcadores de sección, genera archivos
     separados para el Vulnerability Briefing y el Threat Intel Digest.
     Siempre genera también el informe completo (threat-briefing-*) como fallback.
+    filename_prefix sobreescribe el prefijo del archivo "full" (usado para weekly).
     Retorna dict con todas las rutas generadas.
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -421,7 +551,7 @@ def save_report(markdown_content: str, output_dir: str,
     file_prefixes = {
         "vulnerability": "vuln-briefing",
         "threat_intel":  "threat-digest",
-        "full":          "threat-briefing",
+        "full":          filename_prefix or "threat-briefing",
     }
 
     write_md   = fmt in ("markdown", "both", "all")
