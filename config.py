@@ -96,6 +96,11 @@ MIN_CVSS_FOR_HIGHLIGHT = 7.0  # Solo resaltar CVEs con CVSS ≥ este valor
 # Con cloud providers (OpenAI/Claude/Gemini): 2000-3000 para capturar IOCs y TTPs del cuerpo completo.
 ARTICLE_MAX_TOKENS = 800
 
+# Tokens máximos del JSON de salida por artículo en Stage 2.
+# Ollama: 600 (ajustado a num_ctx=2048 — prompt+contenido+respuesta deben caber).
+# Cloud:  900 — artículos largos (USN, Patch Tuesday) listan 50+ paquetes y se cortan con 600.
+SUMMARY_MAX_TOKENS = 600
+
 # Categorías del OPML a incluir (None = todas las 5 categorías)
 # Opciones: "Cibersecurity", "Hacking & Research", "Threat Intel", "Vulnerability", "LATAM"
 FEED_CATEGORIES = None
@@ -139,6 +144,7 @@ MAX_RETRIES    = 2     # reintentos si falla la extracción de contenido
 NO_SCRAPE_DOMAINS = {
     "vulners.com",
     "sploitus.com",
+    "wiz.io",       # bloquea scrapers con 403
 }
 
 # CISA KEV — catálogo oficial de CVEs explotados activamente en producción.

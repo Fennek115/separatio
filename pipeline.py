@@ -401,6 +401,7 @@ def _summarize_one(item: dict, dry_run: bool) -> ArticleSummary:
         num_threads=getattr(config, "OLLAMA_NUM_THREADS", 0),
         max_retries=config.MAX_RETRIES,
         provider=config.PROVIDER,
+        max_tokens=getattr(config, "SUMMARY_MAX_TOKENS", 600),
     )
 
 

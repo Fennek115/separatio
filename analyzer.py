@@ -384,6 +384,7 @@ def summarize_article(
     num_threads: int = 0,
     max_retries: int = 1,
     provider: str = "ollama",
+    max_tokens: int = 600,
 ) -> ArticleSummary:
     summary = ArticleSummary(
         article_id=article_id, title=title, url=url,
@@ -399,7 +400,7 @@ def summarize_article(
                 user=prompt,
                 provider=provider,
                 model=model,
-                max_tokens=600,
+                max_tokens=max_tokens,
                 temperature=0.1,
                 ollama_host=ollama_host,
                 timeout=timeout,
