@@ -294,6 +294,15 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             overflow-wrap: break-word;
         }}
         tr:nth-child(even) td {{ background: #faf5ff; }}
+        /* Tablas de muchas columnas (>6): reducir font y padding para que respire */
+        table.table-wide {{
+            font-size: 7pt;
+        }}
+        table.table-wide th,
+        table.table-wide td {{
+            padding: 0.18rem 0.3rem;
+            letter-spacing: 0;
+        }}
 
         /* ── Cita ── */
         blockquote {{
@@ -392,8 +401,8 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             Generado: {generated_at}<br>
             Art&iacute;culos analizados: {total_articles} &nbsp;&middot;&nbsp; Fuentes: {total_feeds}<br>
             An&aacute;lisis automatizado &nbsp;&middot;&nbsp; Threat Intelligence Pipeline<br>
-            ID: <strong>{report_id}</strong> &nbsp;&middot;&nbsp;
-            SHA-256: <span style="font-family:'IBM Plex Mono','Liberation Mono',monospace;font-size:7pt;color:#9ca3af">{content_hash_short}&hellip;</span>
+            ID: <strong>{report_id}</strong><br>
+            <span style="font-family:'IBM Plex Mono','Liberation Mono',monospace;font-size:6.5pt;color:#9ca3af;letter-spacing:0.02em">SHA-256: {content_hash}</span>
         </div>
         <div class="cover-tlp">TLP:WHITE</div>
     </div>
@@ -562,7 +571,8 @@ def markdown_to_html_body(markdown_text: str) -> str:
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             if not in_table:
                 close_list()
-                html_lines.append("<table><thead>")
+                table_cls = ' class="table-wide"' if len(cells) > 6 else ""
+                html_lines.append(f"<table{table_cls}><thead>")
                 in_table = True
                 in_thead = True
                 html_lines.append(

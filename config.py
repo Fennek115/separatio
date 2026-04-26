@@ -222,12 +222,13 @@ PHASE_MODELS: dict = {
 }
 
 # Tokens máximos de salida por fase
+# Ollama CPU: bajar ~40% (ver README para tabla completa por proveedor)
 PHASE_MAX_TOKENS: dict = {
-    "vulnerability": 2500,
-    "threat_intel":  2500,
-    "latam":         1500,
-    "general":       1000,
-    "synthesis":     1500,
+    "vulnerability": 3500,
+    "threat_intel":  3000,
+    "latam":         1800,
+    "general":       1500,
+    "synthesis":     2000,
 }
 
 # Máximo de artículos enviados al prompt de cada fase (top N por severidad)

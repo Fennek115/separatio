@@ -686,6 +686,19 @@ pip install weasyprint
 
 The PDF template uses a violet palette (`#7c3aed`) with `TLP:WHITE` labeling in the footer of every page. Without `fonts-ibm-plex` it falls back to Liberation Sans / DejaVu Sans (already installed as weasyprint dependencies).
 
+#### Report ID and integrity hash
+
+Every generated PDF includes two identifiers:
+
+| Field | Format | Where |
+|-------|--------|-------|
+| **Report ID** | `TIR-YYYYMMDD-XXXX` (e.g. `TIR-20260426-3A9F`) | Cover page + every page footer |
+| **SHA-256** | 64-char hex of the markdown content | Cover page + colophon |
+
+**Report ID** — a unique identifier per run (date + 4 random hex chars). Useful for referencing a specific briefing in tickets, chat, or email: *"see TIR-20260426-3A9F, page 4"* is unambiguous regardless of how many times the report is regenerated for the same date.
+
+**SHA-256 hash** — a cryptographic fingerprint of the markdown source. It allows anyone who receives the PDF to verify the document was not modified after generation: re-run `sha256sum` on the `.md` file and compare against what is printed on the cover. If the hashes match, the content is identical to what the pipeline produced. This is standard practice for distributing threat intelligence to multiple recipients — it detects accidental corruption and intentional tampering alike.
+
 ---
 
 ## Feed philosophy
