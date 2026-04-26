@@ -2,9 +2,11 @@
 reporter.py — Renderiza el informe de threat intelligence a Markdown, HTML y PDF.
 """
 
+import hashlib
 import os
 import re
 import logging
+import secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +25,71 @@ def _strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub("", text)
 
 
+# ── Report identity ──────────────────────────────────────────────────────────
+
+def _make_report_id(date_str: str) -> str:
+    """TIR-YYYYMMDD-XXXX — unique per run, printed on every page."""
+    suffix = secrets.token_hex(2).upper()
+    return f"TIR-{date_str.replace('-', '')}-{suffix}"
+
+
+def _content_hash(content: str) -> str:
+    """Full SHA-256 hex of the markdown content."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+# ── Table of contents ────────────────────────────────────────────────────────
+
+def _slugify(text: str) -> str:
+    text = re.sub(r"<[^>]+>", "", text)
+    text = text.lower()
+    for src, dst in [("á","a"),("à","a"),("ä","a"),("â","a"),("é","e"),("è","e"),
+                     ("ê","e"),("ë","e"),("í","i"),("ì","i"),("î","i"),("ï","i"),
+                     ("ó","o"),("ò","o"),("ô","o"),("ö","o"),("ú","u"),("ù","u"),
+                     ("û","u"),("ü","u"),("ñ","n"),("ç","c")]:
+        text = text.replace(src, dst)
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_]+", "-", text)
+    return text.strip("-")
+
+
+def _extract_toc_entries(markdown: str) -> list[tuple[int, str, str]]:
+    """Return [(level, display_text, slug_id)] for h1/h2 headings only."""
+    entries: list[tuple[int, str, str]] = []
+    seen: dict[str, int] = {}
+    for line in markdown.split("\n"):
+        m = re.match(r"^(#{1,2})\s+(.*)", line)
+        if not m:
+            continue
+        level = len(m.group(1))
+        raw   = m.group(2).strip()
+        # strip inline markdown for display and slug
+        clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", raw)
+        clean = re.sub(r"[*_`#]", "", clean).strip()
+        slug  = _slugify(clean)
+        if slug in seen:
+            seen[slug] += 1
+            slug = f"{slug}-{seen[slug]}"
+        else:
+            seen[slug] = 0
+        entries.append((level, clean, slug))
+    return entries
+
+
+def _build_toc_html(entries: list[tuple[int, str, str]]) -> str:
+    if not entries:
+        return ""
+    lines = ['<div class="toc">', '<p class="toc-title">Índice</p>', '<ul class="toc-list">']
+    for level, text, slug in entries:
+        lines.append(
+            f'<li class="toc-h{level}">'
+            f'<a class="toc-link" href="#{slug}">{text}</a>'
+            f'</li>'
+        )
+    lines += ["</ul>", "</div>"]
+    return "\n".join(lines)
+
+
 PDF_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -38,7 +105,7 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             size: A4;
             margin: 2.2cm 2.5cm 2cm 2.5cm;
             @bottom-right {{
-                content: counter(page) " / " counter(pages);
+                content: "{report_id}  ·  " counter(page) "/" counter(pages);
                 font-size: 7.5pt;
                 color: #9ca3af;
                 font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
@@ -199,6 +266,8 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             border-collapse: collapse;
             margin-bottom: 0.9rem;
             font-size: 8.5pt;
+            table-layout: fixed;
+            word-break: break-word;
         }}
         thead {{
             display: table-header-group;
@@ -216,11 +285,13 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             font-weight: 600;
             font-size: 7.5pt;
             letter-spacing: 0.05em;
+            overflow-wrap: break-word;
         }}
         td {{
             border: 1px solid #e5e7eb;
             padding: 0.4rem 0.65rem;
             vertical-align: top;
+            overflow-wrap: break-word;
         }}
         tr:nth-child(even) td {{ background: #faf5ff; }}
 
@@ -243,6 +314,68 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             color: #9ca3af;
             letter-spacing: 0.04em;
         }}
+        .colophon-hash {{
+            display: block;
+            margin-top: 0.5rem;
+            font-style: normal;
+            font-size: 6.5pt;
+            color: #d1d5db;
+            letter-spacing: 0.03em;
+            font-family: "IBM Plex Mono", "Liberation Mono", monospace;
+        }}
+
+        /* ── Evitar títulos huérfanos al final de página ── */
+        h1 + p, h2 + p, h3 + p,
+        h1 + ul, h2 + ul, h3 + ul,
+        h1 + ol, h2 + ol, h3 + ol,
+        h1 + table, h2 + table, h3 + table,
+        h1 + blockquote, h2 + blockquote, h3 + blockquote {{
+            break-before: avoid;
+        }}
+
+        /* ── Tabla de Contenidos ── */
+        .toc {{
+            page-break-after: always;
+            margin-top: 1rem;
+        }}
+        .toc-title {{
+            font-size: 14pt;
+            font-weight: 700;
+            color: #1e1b4b;
+            border-bottom: 2px solid #7c3aed;
+            padding-bottom: 0.4rem;
+            margin-bottom: 1.4rem;
+        }}
+        .toc-list {{
+            list-style: none;
+            padding-left: 0;
+            margin: 0;
+        }}
+        .toc-list li {{
+            margin-bottom: 0.12rem;
+        }}
+        .toc-list li.toc-h1 {{
+            font-size: 10pt;
+            font-weight: 600;
+            color: #1e1b4b;
+            margin-top: 0.5rem;
+        }}
+        .toc-list li.toc-h2 {{
+            padding-left: 1.4rem;
+            font-size: 9pt;
+            color: #4b5563;
+        }}
+        .toc-link {{
+            color: inherit;
+            text-decoration: none;
+            display: block;
+        }}
+        .toc-link::after {{
+            content: leader("·") " " target-counter(attr(href), page);
+            color: #9ca3af;
+            font-size: 8pt;
+            font-weight: normal;
+        }}
     </style>
 </head>
 <body>
@@ -258,14 +391,18 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="cover-meta">
             Generado: {generated_at}<br>
             Art&iacute;culos analizados: {total_articles} &nbsp;&middot;&nbsp; Fuentes: {total_feeds}<br>
-            An&aacute;lisis automatizado &nbsp;&middot;&nbsp; Threat Intelligence Pipeline
+            An&aacute;lisis automatizado &nbsp;&middot;&nbsp; Threat Intelligence Pipeline<br>
+            ID: <strong>{report_id}</strong> &nbsp;&middot;&nbsp;
+            SHA-256: <span style="font-family:'IBM Plex Mono','Liberation Mono',monospace;font-size:7pt;color:#9ca3af">{content_hash_short}&hellip;</span>
         </div>
         <div class="cover-tlp">TLP:WHITE</div>
     </div>
+    {toc}
     {body}
     <div class="colophon">
         "Lo que tuve que decir sobre el funcionamiento del Sol ha concluido."
         &nbsp;&mdash;&nbsp; Tabula Smaragdina
+        <span class="colophon-hash">SHA-256: {content_hash}</span>
     </div>
 </body>
 </html>"""
@@ -461,7 +598,10 @@ def markdown_to_html_body(markdown_text: str) -> str:
         if hm:
             close_list()
             level = len(hm.group(1))
-            html_lines.append(f"<h{level}>{_inline(hm.group(2))}</h{level}>")
+            text  = hm.group(2)
+            clean = re.sub(r"\[([^\]]*)\]\([^)]*\)|[*_`#]", lambda m: m.group(1) or "", text)
+            slug  = _slugify(clean)
+            html_lines.append(f'<h{level} id="{slug}">{_inline(text)}</h{level}>')
             continue
 
         # Listas no ordenadas
@@ -542,15 +682,21 @@ def split_report_sections(markdown: str) -> dict[str, str]:
 
 def _render_html(content: str, template: str, date_str: str,
                  generated_at: str, total_articles: int,
-                 total_feeds: int, provider: str) -> str:
+                 total_feeds: int, provider: str,
+                 report_id: str = "", content_hash: str = "") -> str:
     body = markdown_to_html_body(content)
+    toc  = _build_toc_html(_extract_toc_entries(content)) if template is PDF_HTML_TEMPLATE else ""
     return template.format(
         date=date_str,
         generated_at=generated_at,
         body=body,
+        toc=toc,
         total_articles=total_articles,
         total_feeds=total_feeds,
         provider=provider or "pipeline",
+        report_id=report_id,
+        content_hash=content_hash,
+        content_hash_short=content_hash[:16] if content_hash else "",
     )
 
 
@@ -574,18 +720,21 @@ def _write_pdf(html_string: str, path: str) -> bool:
 def _write_report_file(content: str, path: str, fmt: str,
                        date_str: str, generated_at: str,
                        total_articles: int, total_feeds: int,
-                       provider: str = "") -> None:
+                       provider: str = "",
+                       report_id: str = "", content_hash: str = "") -> None:
     content = _strip_emoji(content)
     if fmt == "md":
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
     elif fmt == "pdf":
         html = _render_html(content, PDF_HTML_TEMPLATE, date_str,
-                            generated_at, total_articles, total_feeds, provider)
+                            generated_at, total_articles, total_feeds, provider,
+                            report_id, content_hash)
         _write_pdf(html, path)
     else:
         html = _render_html(content, HTML_TEMPLATE, date_str,
-                            generated_at, total_articles, total_feeds, provider)
+                            generated_at, total_articles, total_feeds, provider,
+                            report_id, content_hash)
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
 
@@ -604,7 +753,14 @@ def save_report(markdown_content: str, output_dir: str,
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     safe_date    = date_str.replace(" ", "_").replace("/", "-")
+    report_id    = _make_report_id(date_str)
+    chash        = _content_hash(markdown_content)
     paths: dict[str, str] = {}
+
+    def _write(content: str, path: str, fmt: str) -> None:
+        _write_report_file(content, path, fmt, date_str, generated_at,
+                           total_articles, total_feeds, provider,
+                           report_id=report_id, content_hash=chash)
 
     sections = split_report_sections(markdown_content) if split else {"full": markdown_content}
 
@@ -627,22 +783,19 @@ def save_report(markdown_content: str, output_dir: str,
 
         if write_md:
             path = os.path.join(reports_dir, f"{prefix}-{safe_date}.md")
-            _write_report_file(content, path, "md", date_str, generated_at,
-                               total_articles, total_feeds, provider)
+            _write(content, path, "md")
             paths[f"{key}_markdown"] = path
             logger.info(f"Informe Markdown ({key}): {path}")
 
         if write_html:
             path = os.path.join(reports_dir, f"{prefix}-{safe_date}.html")
-            _write_report_file(content, path, "html", date_str, generated_at,
-                               total_articles, total_feeds, provider)
+            _write(content, path, "html")
             paths[f"{key}_html"] = path
             logger.info(f"Informe HTML ({key}): {path}")
 
         if write_pdf:
             path = os.path.join(output_dir, f"{prefix}-{safe_date}.pdf")
-            _write_report_file(content, path, "pdf", date_str, generated_at,
-                               total_articles, total_feeds, provider)
+            _write(content, path, "pdf")
             paths[f"{key}_pdf"] = path
             logger.info(f"Informe PDF ({key}): {path}")
 
@@ -656,13 +809,11 @@ def save_report(markdown_content: str, output_dir: str,
             paths["full_markdown"] = path
         if write_html:
             path = os.path.join(reports_dir, f"threat-briefing-{safe_date}.html")
-            _write_report_file(combined, path, "html", date_str, generated_at,
-                               total_articles, total_feeds, provider)
+            _write(combined, path, "html")
             paths["full_html"] = path
         if write_pdf:
             path = os.path.join(output_dir, f"threat-briefing-{safe_date}.pdf")
-            _write_report_file(combined, path, "pdf", date_str, generated_at,
-                               total_articles, total_feeds, provider)
+            _write(combined, path, "pdf")
             paths["full_pdf"] = path
             logger.info(f"Informe PDF (completo): {path}")
 
