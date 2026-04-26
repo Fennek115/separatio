@@ -13,17 +13,24 @@ Runs fully local with Ollama by default. Optionally routes Stage 2 and Stage 3 t
 
 ## What it produces
 
-**Daily reports** in Markdown, HTML, and optionally PDF (set `OUTPUT_FORMAT = "all"`):
+**Daily report** (`PHASE_REPORTS = True`, default for cloud providers) — five sections assembled into a single document:
 
-- **Vulnerability Briefing** (`vuln-briefing-*`) — CVEs of the day, affected systems, CISA KEV + EPSS correlation, technical analysis per critical CVE, patch priority ranking
-- **Threat Intelligence Digest** (`threat-digest-*`) — APT activity, ransomware campaigns, actor tracking (with persistence history), corroborated IOCs, LATAM context, executive summary
-- **IOC Export** (`iocs-YYYY-MM-DD.csv` + `.json`) — all IOCs extracted from the day's articles, typed (ip / domain / sha256 / sha1 / md5 / url) and attributed to source
+| Section | Content |
+|---------|---------|
+| **Resumen Ejecutivo** | Alert level, #1 priority action, cross-domain correlations, strategic recommendation for the week |
+| **Vulnerability Briefing** | CVE table with CVSS / EPSS / CISA KEV status, technical analysis per critical CVE, patch priority list with source links |
+| **Threat Intelligence Digest** | APT campaigns, actor profiles (MITRE TTPs, attribution confidence), corroborated IOCs, SOC detection recommendations |
+| **Contexto Regional LATAM** | Regional incidents by country/sector, global threats with LATAM exposure probability |
+| **Panorama General** | Cybersecurity news headlines, industry trends, regulatory updates |
+
+**IOC Export** — always written, regardless of `OUTPUT_FORMAT`:
+- `iocs-YYYY-MM-DD.csv` — one row per unique IOC: `date, ioc, type, severity, title, feed, cves`
+- `iocs-YYYY-MM-DD.json` — same data grouped by type (`ip` / `domain` / `sha256` / `sha1` / `md5` / `url` / `other`)
 
 **Weekly digest** (run with `--weekly`):
+- Consolidated week-over-week view: CVE trends, most active actors, dominant TTPs, LATAM context, recommendations for the next 7 days
 
-- **Weekly Briefing** (`weekly-briefing-YYYY-WXX.*`) — week-over-week CVE trends, most active threat actors, dominant TTPs, LATAM context, strategic recommendations
-
-The combined daily fallback (`threat-briefing-*`) is also always generated alongside the split files.
+**Legacy mode** (`PHASE_REPORTS = False`) — single combined prompt, produces `vuln-briefing-*` + `threat-digest-*` split files. Recommended for Ollama CPU-only.
 
 ---
 
@@ -73,24 +80,44 @@ Miniflux RSS (unread articles, sorted by published_at desc)
       threat type trend (% change vs. window average, only changes ≥20%)
   - LLM always receives a fixed-size window block — prompt size never grows
 
-     ▼  Stage 3 — analyzer.py → LLM  (consolidated report)
-  Pre-computed context injected into prompt:
-    - severity distribution, top CVEs by mention count, priority article list
-    - verified correlations: KEV + EPSS scores, corroborated CVEs, PoC signals
-    - corroborated IOCs, trending actors
-    - historical trending: persistent vs. emerging actors, recurring CVEs
+     ▼  Stage 3 — analyzer.py → LLM  (multi-phase, PHASE_REPORTS=True)
+  4 sequential specialized calls, each with domain-expert system prompt:
+    3A. Vulnerability  → CVE analyst persona (KEV/EPSS context injected)
+    3B. Threat Intel   → APT analyst persona (correlations + trending injected)
+    3C. LATAM          → regional analyst persona
+    3D. General        → news editor persona
+  Phase routing: PHASE_CATEGORY_MAP in config.py
+    → new Miniflux feeds route automatically by category
+    → unknown categories fall back to General with no code changes
+
+     ▼  Stage 4 — analyzer.py → LLM  (master synthesis)
+  Receives all 4 phase outputs as input.
+  Produces: alert level, #1 priority, cross-domain correlations, strategic recommendation.
 
      ▼  reporter.py
-  reports/vuln-briefing-YYYY-MM-DD.{md,html,pdf}
-  reports/threat-digest-YYYY-MM-DD.{md,html,pdf}
-  reports/threat-briefing-YYYY-MM-DD.{md,html,pdf}   ← combined fallback
-  reports/iocs-YYYY-MM-DD.{csv,json}
+  OUTPUT_DIR/YYYY-MM-DD/
+  ├── threat-briefing-YYYY-MM-DD.pdf      ← final deliverable (all sections)
+  ├── summaries-cache-YYYY-MM-DD.json     ← article cache for --report-only / --weekly
+  ├── reports/
+  │   ├── threat-briefing-YYYY-MM-DD.md
+  │   └── threat-briefing-YYYY-MM-DD.html
+  └── iocs/
+      ├── iocs-YYYY-MM-DD.csv
+      └── iocs-YYYY-MM-DD.json
+
+  Legacy mode (PHASE_REPORTS=False):
+  OUTPUT_DIR/YYYY-MM-DD/reports/
+  ├── vuln-briefing-YYYY-MM-DD.{md,html}
+  ├── threat-digest-YYYY-MM-DD.{md,html}
+  └── threat-briefing-YYYY-MM-DD.{md,html,pdf}
 
 ─────────── Weekly (--weekly) ───────────
-  Loads last N days of summaries-cache-*.json
-     ▼  analyzer.py → LLM (single consolidated prompt, no split)
-  reports/weekly-briefing-YYYY-WXX.{md,html,pdf}
-  reports/iocs-YYYY-WXX.{csv,json}
+  Loads last N days of summaries-cache-*.json from dated subfolders
+     ▼  analyzer.py → LLM (single consolidated prompt)
+  OUTPUT_DIR/YYYY-WXX/
+  ├── weekly-briefing-YYYY-WXX.pdf
+  ├── reports/weekly-briefing-YYYY-WXX.{md,html}
+  └── iocs/iocs-YYYY-WXX.{csv,json}
 ```
 
 ---
@@ -133,35 +160,71 @@ If `weasyprint` is not installed, PDF output is silently skipped — all other f
 
 ### 2. Configure
 
-Edit `config.py` with your environment:
+Edit `config.py`. The minimum required settings depend on your backend:
 
+**Ollama (local)**
 ```python
-# Choose your LLM provider
-PROVIDER = "ollama"   # or: "claude" | "openai" | "gemini"
-
-# Miniflux connection
-MINIFLUX_URL       = "http://localhost:8080"
-MINIFLUX_API_TOKEN = "your-api-token"   # Settings → API Keys in Miniflux UI
-
-# If using Ollama
+PROVIDER      = "ollama"
 OLLAMA_HOST   = "http://192.168.x.x:11434"
 SUMMARY_MODEL = "qwen3.5:4b"
 REPORT_MODEL  = "qwen3.5:9b"
+PHASE_REPORTS = False   # single-prompt mode for CPU-only hardware
 
-# If using a cloud provider — set the matching key
-ANTHROPIC_API_KEY = ""   # or env var ANTHROPIC_API_KEY
-OPENAI_API_KEY    = ""   # or env var OPENAI_API_KEY
-GEMINI_API_KEY    = ""   # or env var GEMINI_API_KEY
-
-# Article truncation — increase for cloud providers
-ARTICLE_MAX_TOKENS = 800     # Ollama: keep at 800 (fits 2K context)
-# ARTICLE_MAX_TOKENS = 2500  # Cloud: captures full IOC lists and TTP details
-
-# Output format
-OUTPUT_FORMAT = "both"   # or: "markdown" | "html" | "pdf" | "all" (md+html+pdf)
+MINIFLUX_URL       = "http://localhost:8080"
+MINIFLUX_API_TOKEN = "your-api-token"
 ```
 
-> **Tip:** API keys can be set as environment variables. The config reads them via `os.getenv()`.
+**OpenAI**
+```python
+PROVIDER           = "openai"
+OPENAI_API_KEY     = "sk-..."      # or: export OPENAI_API_KEY=sk-...
+SUMMARY_MODEL      = "gpt-4o-mini"
+REPORT_MODEL       = "gpt-4o"
+ARTICLE_MAX_TOKENS = 2500
+PARALLEL_WORKERS   = 8
+PHASE_REPORTS      = True
+
+PHASE_MODELS = {
+    "vulnerability": "gpt-4o",
+    "threat_intel":  "gpt-4o",
+    "latam":         "gpt-4o",
+    "general":       "gpt-4o-mini",
+    "synthesis":     "gpt-4o",
+}
+
+MINIFLUX_URL       = "http://localhost:8080"
+MINIFLUX_API_TOKEN = "your-api-token"
+```
+
+**Claude (Anthropic)**
+```python
+PROVIDER           = "claude"
+ANTHROPIC_API_KEY  = "sk-ant-..."  # or: export ANTHROPIC_API_KEY=sk-ant-...
+SUMMARY_MODEL      = "claude-haiku-4-5-20251001"
+REPORT_MODEL       = "claude-sonnet-4-6"
+ARTICLE_MAX_TOKENS = 2500
+PARALLEL_WORKERS   = 8
+PHASE_REPORTS      = True
+
+PHASE_MODELS = {
+    "vulnerability": "claude-sonnet-4-6",
+    "threat_intel":  "claude-sonnet-4-6",
+    "latam":         "claude-haiku-4-5-20251001",
+    "general":       "claude-haiku-4-5-20251001",
+    "synthesis":     "claude-sonnet-4-6",
+}
+
+MINIFLUX_URL       = "http://localhost:8080"
+MINIFLUX_API_TOKEN = "your-api-token"
+```
+
+> **Tip:** API keys can be set as environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`). The config reads them via `os.getenv()` — no need to hardcode them in the file.
+
+**Output format** — set in `config.py`:
+```python
+OUTPUT_FORMAT = "all"   # md + html + pdf  (requires weasyprint)
+OUTPUT_FORMAT = "both"  # md + html only   (default)
+```
 
 ### 3. Import feeds
 
@@ -277,15 +340,32 @@ Change `PROVIDER` in `config.py` and set the matching model names — everything
 
 ### Ollama (default — fully local)
 
+```bash
+ollama pull qwen3.5:4b
+ollama pull qwen3.5:9b
+```
+
 ```python
 PROVIDER           = "ollama"
-SUMMARY_MODEL      = "qwen3.5:4b"
-REPORT_MODEL       = "qwen3.5:9b"
 OLLAMA_HOST        = "http://<host>:11434"
-ARTICLE_MAX_TOKENS = 800   # keep at 800 for 2K context window
+SUMMARY_MODEL      = "qwen3.5:4b"     # Stage 2 extraction (~3.2 GB RAM)
+REPORT_MODEL       = "qwen3.5:9b"     # Stage 3 report   (~7.2 GB RAM)
+ARTICLE_MAX_TOKENS = 800              # keep at 800 — fits 2K context window
+PARALLEL_WORKERS   = 1               # CPU-only: serialize to avoid timeout
+PHASE_REPORTS      = False            # single-prompt mode for CPU-only
 ```
 
 Timing on i7-10510U (CPU-only): ~1.75 min/article → 120 articles ≈ 3.5h total.
+
+**With GPU** — increase these:
+```python
+ARTICLE_MAX_TOKENS = 2000    # capture more content per article
+PARALLEL_WORKERS   = 3       # GPU handles concurrent inference
+PHASE_REPORTS      = True    # enable multi-phase for better quality
+# PHASE_MODELS: leave all None → uses REPORT_MODEL for every phase
+```
+
+See the [GPU model recommendations table](#ollama-with-gpu) for model sizing by VRAM.
 
 ### Claude (Anthropic)
 
@@ -295,11 +375,21 @@ pip install anthropic
 
 ```python
 PROVIDER           = "claude"
-SUMMARY_MODEL      = "claude-haiku-4-5-20251001"   # fast + cheap for per-article extraction
-REPORT_MODEL       = "claude-sonnet-4-6"            # quality report generation
-ANTHROPIC_API_KEY  = "sk-ant-..."                   # or env var ANTHROPIC_API_KEY
+ANTHROPIC_API_KEY  = "sk-ant-..."   # or: export ANTHROPIC_API_KEY=sk-ant-...
+SUMMARY_MODEL      = "claude-haiku-4-5-20251001"
+REPORT_MODEL       = "claude-sonnet-4-6"
 ARTICLE_MAX_TOKENS = 2500
 REPORT_MAX_TOKENS  = 10000
+PARALLEL_WORKERS   = 8
+PHASE_REPORTS      = True
+
+PHASE_MODELS = {
+    "vulnerability": "claude-sonnet-4-6",
+    "threat_intel":  "claude-sonnet-4-6",
+    "latam":         "claude-haiku-4-5-20251001",   # cheaper — shorter output
+    "general":       "claude-haiku-4-5-20251001",
+    "synthesis":     "claude-sonnet-4-6",
+}
 ```
 
 ### OpenAI
@@ -310,12 +400,24 @@ pip install openai
 
 ```python
 PROVIDER           = "openai"
-SUMMARY_MODEL      = "gpt-4o-mini"   # Stage 2
-REPORT_MODEL       = "gpt-4o"        # Stage 3
-OPENAI_API_KEY     = "sk-..."        # or env var OPENAI_API_KEY
+OPENAI_API_KEY     = "sk-..."        # or: export OPENAI_API_KEY=sk-...
+SUMMARY_MODEL      = "gpt-4o-mini"
+REPORT_MODEL       = "gpt-4o"
 ARTICLE_MAX_TOKENS = 2500
 REPORT_MAX_TOKENS  = 10000
+PARALLEL_WORKERS   = 8
+PHASE_REPORTS      = True
+
+PHASE_MODELS = {
+    "vulnerability": "gpt-4o",
+    "threat_intel":  "gpt-4o",
+    "latam":         "gpt-4o",        # gpt-4o-mini has weaker Spanish
+    "general":       "gpt-4o-mini",
+    "synthesis":     "gpt-4o",
+}
 ```
+
+> **Rate limits:** `gpt-4o` on Tier 1 has 30K TPM — not enough for 120 articles in Stage 2. Use `gpt-4o-mini` for `SUMMARY_MODEL`. For `REPORT_MODEL` and `PHASE_MODELS`, `gpt-4.1` offers 200K TPM and is a good alternative.
 
 ### Gemini (Google)
 
@@ -325,23 +427,72 @@ pip install google-generativeai
 
 ```python
 PROVIDER           = "gemini"
-SUMMARY_MODEL      = "gemini-2.0-flash"   # Stage 2
-REPORT_MODEL       = "gemini-2.5-pro"     # Stage 3
-GEMINI_API_KEY     = "AIza..."            # or env var GEMINI_API_KEY
+GEMINI_API_KEY     = "AIza..."       # or: export GEMINI_API_KEY=AIza...
+SUMMARY_MODEL      = "gemini-2.0-flash"
+REPORT_MODEL       = "gemini-1.5-pro"
 ARTICLE_MAX_TOKENS = 2500
 REPORT_MAX_TOKENS  = 10000
+PARALLEL_WORKERS   = 8
+PHASE_REPORTS      = True
+
+PHASE_MODELS = {
+    "vulnerability": "gemini-1.5-pro",
+    "threat_intel":  "gemini-1.5-pro",
+    "latam":         "gemini-1.5-pro",
+    "general":       "gemini-2.0-flash",
+    "synthesis":     "gemini-2.5-pro",   # 1M context, best cross-domain synthesis
+}
 ```
+
+### Multi-phase reports (cloud providers)
+
+When `PHASE_REPORTS = True` (default for cloud), Stage 3 splits into 4 specialized LLM calls instead of one large prompt, each with a domain-expert persona:
+
+| Phase | Category sources | Focus |
+|-------|-----------------|-------|
+| **Vulnerability** | `Vulnerability` | CVE table, CVSS/EPSS/KEV, patch priority, technical analysis |
+| **Threat Intel** | `Threat Intel`, `Hacking & Research` | APT campaigns, actors, TTPs (MITRE), IOCs |
+| **LATAM** | `LATAM` | Regional incidents, global threats with LATAM impact, sector risk |
+| **General** | `Cibersecurity` | News headlines, industry trends, executive summary fodder |
+
+Stage 4 then runs a master synthesis call that receives all 4 outputs and produces the cross-domain executive summary (correlations, #1 priority, strategic recommendation).
+
+**Auto-scaling with new feeds:** any feed added to Miniflux in a known category is automatically routed to the right phase. New categories fall back to `general`. To assign a new category to a specific phase, add it to `PHASE_CATEGORY_MAP` in `config.py` — no code changes required.
+
+#### Recommended models per phase
+
+| Phase | OpenAI | Claude | Notes |
+|-------|--------|--------|-------|
+| Stage 2 — extraction | `gpt-4o-mini` | `claude-haiku-4-5-20251001` | High-volume JSON, fast and cheap |
+| Vulnerability | `gpt-4o` | `claude-sonnet-4-6` | Technical precision for CVE analysis |
+| Threat Intel | `gpt-4o` | `claude-sonnet-4-6` | Narrative synthesis, actor attribution |
+| LATAM | `gpt-4o` | `claude-haiku-4-5-20251001` | Regional context; haiku has good Spanish |
+| General | `gpt-4o-mini` | `claude-haiku-4-5-20251001` | News summary, shorter output |
+| Stage 4 — synthesis | `gpt-4o` | `claude-sonnet-4-6` | Cross-domain executive summary |
+
+Set these in `PHASE_MODELS` inside `config.py` (comments in the file show the exact values to copy).
+
+#### Ollama with GPU
+
+`PHASE_REPORTS = True` also works with Ollama on GPU. Keep all `PHASE_MODELS` as `None` (falls back to `REPORT_MODEL`) and raise `PARALLEL_WORKERS` to 2–4 depending on VRAM:
+
+| VRAM | Recommended model | `PARALLEL_WORKERS` |
+|------|------------------|--------------------|
+| 12 GB | `qwen3:8b` | 2 |
+| 24 GB | `qwen3:14b` or `qwen3:30b` Q4 | 3 |
+| 48 GB (2× GPU) | `qwen3:32b` full | 4 |
 
 ### Provider comparison
 
-| Provider | Stage 2 (120 articles) | Stage 3 | Privacy | Approx. cost/run |
-|----------|------------------------|---------|---------|------------------|
-| Ollama | ~3.5h (CPU-only) | ~20–30 min | Full — data stays local | Free |
-| Claude | ~2 min | ~30 sec | Articles sent to Anthropic | ~$0.05–0.10 |
-| OpenAI | ~2 min | ~30 sec | Articles sent to OpenAI | ~$0.05–0.15 |
-| Gemini | ~2 min | ~30 sec | Articles sent to Google | ~$0.01–0.05 |
+| Provider | Stage 2 (120 articles) | Stage 3+4 (multi-phase) | Privacy | Approx. cost/run |
+|----------|------------------------|-------------------------|---------|------------------|
+| Ollama (CPU-only) | ~3.5h | ~30–40 min | Full — local | Free |
+| Ollama (GPU 24 GB) | ~15 min | ~10–15 min | Full — local | Free |
+| Claude | ~2 min | ~1–2 min | Sent to Anthropic | ~$0.30–0.50 |
+| OpenAI | ~2 min | ~1–2 min | Sent to OpenAI | ~$0.25–0.50 |
+| Gemini | ~2 min | ~1–2 min | Sent to Google | ~$0.10–0.30 |
 
-Cloud providers use direct API calls (no streaming). Ollama uses streaming in Stage 3 to avoid timeout on long CPU-only generations.
+Cloud providers use direct API calls (no streaming). Ollama uses streaming per phase to avoid timeouts on CPU-only hardware.
 
 ---
 
@@ -402,7 +553,55 @@ For CPU-only hardware (~1.75 min/article in Stage 2), rotating categories keeps 
 0 8 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --weekly >> /var/log/threat-pipeline.log 2>&1
 ```
 
-For cloud providers (Stage 2 takes ~2 min total), a single daily cron at any hour covers all feeds.
+**Cloud providers** — Stage 2+3+4 takes ~5 min total, all categories in one run:
+
+```cron
+# Daily report at 07:00 — covers all 39 feeds in a single run
+0 7 * * *  root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py >> /var/log/threat-pipeline.log 2>&1
+# Weekly digest every Monday at 08:00
+0 8 * * 1  root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --weekly >> /var/log/threat-pipeline.log 2>&1
+```
+
+---
+
+## Output folder structure
+
+Every run creates a dated subfolder under `OUTPUT_DIR`:
+
+```
+OUTPUT_DIR/                                  (default: ./reports/)
+├── history.json                             long-term trending (~200 bytes/day)
+├── pipeline.log                             run logs (appended each run)
+│
+└── YYYY-MM-DD/                              one folder per daily run
+    ├── threat-briefing-YYYY-MM-DD.pdf       final deliverable — all sections
+    ├── summaries-cache-YYYY-MM-DD.json      article cache (used by --report-only, --weekly)
+    ├── reports/
+    │   ├── threat-briefing-YYYY-MM-DD.md
+    │   └── threat-briefing-YYYY-MM-DD.html
+    └── iocs/
+        ├── iocs-YYYY-MM-DD.csv
+        └── iocs-YYYY-MM-DD.json
+
+└── YYYY-WXX/                                one folder per weekly run (--weekly)
+    ├── weekly-briefing-YYYY-WXX.pdf
+    ├── reports/
+    │   ├── weekly-briefing-YYYY-WXX.md
+    │   └── weekly-briefing-YYYY-WXX.html
+    └── iocs/
+        ├── iocs-YYYY-WXX.csv
+        └── iocs-YYYY-WXX.json
+```
+
+**Legacy mode** (`PHASE_REPORTS = False`) — split files are placed in `reports/` alongside the combined report:
+```
+YYYY-MM-DD/reports/
+├── vuln-briefing-YYYY-MM-DD.{md,html}
+├── threat-digest-YYYY-MM-DD.{md,html}
+└── threat-briefing-YYYY-MM-DD.{md,html}    combined fallback
+```
+
+`history.json` and `pipeline.log` stay at `OUTPUT_DIR` root — they accumulate across runs and are never moved into dated subfolders. The `summaries-cache-*.json` files are detected automatically by `--report-only` and `--weekly` — a fallback also finds caches from older flat-structure runs if present.
 
 ---
 
@@ -416,7 +615,12 @@ All settings live in `config.py`.
 |----------|---------|-------|
 | `PROVIDER` | `"ollama"` | `ollama` \| `claude` \| `openai` \| `gemini` |
 | `SUMMARY_MODEL` | `"qwen3.5:4b"` | Model for Stage 2 — set to match your provider |
-| `REPORT_MODEL` | `"qwen3.5:9b"` | Model for Stage 3 — set to match your provider |
+| `REPORT_MODEL` | `"qwen3.5:9b"` | Default model for Stage 3/4 phases (overridden per-phase by `PHASE_MODELS`) |
+| `PHASE_REPORTS` | `True` | Multi-phase mode. Set `False` for legacy single-prompt (Ollama CPU-only) |
+| `PHASE_CATEGORY_MAP` | see config | Maps phase names → Miniflux category names. Unmapped categories → `general` |
+| `PHASE_MODELS` | all `None` | Per-phase model override. `None` falls back to `REPORT_MODEL`. See config comments for OpenAI/Claude values. |
+| `PHASE_MAX_TOKENS` | see config | Output token limit per phase (vuln/threat: 2500, latam: 1500, general: 1000, synthesis: 1500) |
+| `PHASE_ARTICLE_LIMITS` | see config | Max articles sent to each phase prompt (top N by severity) |
 | `ANTHROPIC_API_KEY` | `""` | Required when `PROVIDER=claude` |
 | `OPENAI_API_KEY` | `""` | Required when `PROVIDER=openai` |
 | `GEMINI_API_KEY` | `""` | Required when `PROVIDER=gemini` |
@@ -429,9 +633,9 @@ All settings live in `config.py`.
 | `MAX_ARTICLES` | `120` | Hard cap per run |
 | `PER_FEED_LIMIT` | `10` | Prevents high-volume feeds (MSRC: 2975 entries) from dominating |
 | `FEED_CATEGORIES` | `None` | List of category names, or `None` for all. Override with `--categories`. |
-| `ARTICLE_MAX_TOKENS` | `800` | Content sent per article to Stage 2. Set to 2000–3000 for cloud providers to capture full IOC lists. |
+| `ARTICLE_MAX_TOKENS` | `800` | Content per article sent to Stage 2. Ollama: keep at 800 (2K context). Cloud: set to 2000–3000 to capture full IOC lists and TTP details. |
 | `MIN_CONTENT_LENGTH` | `200` | Discard articles with fewer than N characters of extractable content |
-| `PARALLEL_WORKERS` | `1` | Keep at 1 for CPU-only Ollama |
+| `PARALLEL_WORKERS` | `1` | Ollama CPU-only: keep at 1. Ollama GPU: 2–4. Cloud APIs: 8–12. |
 
 ### Timeouts
 

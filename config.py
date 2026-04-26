@@ -175,3 +175,61 @@ REPORT_ARTICLE_LIMIT = 80
 
 # True → genera vuln-briefing-* y threat-digest-* además del threat-briefing-* completo
 SPLIT_REPORTS = True
+
+# ─────────────────────────────────────────────
+# MULTI-PHASE REPORTS (Stage 3 → 4 fases + síntesis maestra)
+# ─────────────────────────────────────────────
+# True  → 4 fases especializadas secuenciales (Vuln / Threat Intel / LATAM / General)
+#          + Stage 4 síntesis cross-domain. Recomendado para cloud providers.
+# False → prompt único consolidado (legacy, compatible con Ollama CPU-only)
+PHASE_REPORTS = True
+
+# Mapeo fase → categorías de Miniflux.
+# Categorías no listadas → fase "general" por fallback automático.
+# Agregar feeds nuevos en Miniflux no requiere tocar código:
+# basta con que el feed use una categoría ya mapeada aquí,
+# o agregar la categoría nueva a la fase deseada.
+PHASE_CATEGORY_MAP = {
+    "vulnerability": ["Vulnerability"],
+    "threat_intel":  ["Threat Intel", "Hacking & Research"],
+    "latam":         ["LATAM"],
+    "general":       ["Cibersecurity"],
+}
+
+# Modelo por fase. None → usa REPORT_MODEL como fallback.
+#
+# OpenAI:
+#   "vulnerability": "gpt-4o",    "threat_intel": "gpt-4o",
+#   "latam":         "gpt-4o",    "general":      "gpt-4o-mini",
+#   "synthesis":     "gpt-4o"
+#
+# Claude:
+#   "vulnerability": "claude-sonnet-4-6",        "threat_intel": "claude-sonnet-4-6",
+#   "latam":         "claude-haiku-4-5-20251001", "general":      "claude-haiku-4-5-20251001",
+#   "synthesis":     "claude-sonnet-4-6"
+#
+# Ollama GPU: dejar todos en None → usa REPORT_MODEL para todas las fases
+PHASE_MODELS: dict = {
+    "vulnerability": None,
+    "threat_intel":  None,
+    "latam":         None,
+    "general":       None,
+    "synthesis":     None,
+}
+
+# Tokens máximos de salida por fase
+PHASE_MAX_TOKENS: dict = {
+    "vulnerability": 2500,
+    "threat_intel":  2500,
+    "latam":         1500,
+    "general":       1000,
+    "synthesis":     1500,
+}
+
+# Máximo de artículos enviados al prompt de cada fase (top N por severidad)
+PHASE_ARTICLE_LIMITS: dict = {
+    "vulnerability": 50,
+    "threat_intel":  35,
+    "latam":         60,
+    "general":       20,
+}

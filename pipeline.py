@@ -24,7 +24,9 @@ from pathlib import Path
 import config
 from miniflux_client import MinifluxClient
 from extractor import extract_article_text, truncate_text
-from analyzer import ArticleSummary, summarize_article, generate_report, generate_weekly_report, unload_model
+from analyzer import (ArticleSummary, summarize_article, generate_report,
+                      generate_weekly_report, generate_phase_report,
+                      generate_synthesis_report, unload_model)
 from correlator import build_correlation_context, CorrelationContext
 from history import load_history, append_daily_record, save_history, build_trending_context, TrendingContext
 from reporter import save_report
@@ -268,6 +270,29 @@ def run_weekly(days: int = 7) -> None:
     ioc_paths = export_iocs(all_summaries, week_label, weekly_dir)
     paths.update(ioc_paths)
     _print_result(paths)
+
+
+# ─────────────────────────────────────────────
+# AGRUPACIÓN POR FASE (auto-escala con nuevos feeds)
+# ─────────────────────────────────────────────
+
+def group_by_phase(summaries: list[ArticleSummary]) -> dict[str, list[ArticleSummary]]:
+    """
+    Agrupa resúmenes por fase según PHASE_CATEGORY_MAP.
+    Categorías no mapeadas → 'general' automáticamente.
+    Agregar feeds en Miniflux no requiere cambios de código.
+    """
+    cat_map = getattr(config, "PHASE_CATEGORY_MAP", {})
+    cat_to_phase: dict[str, str] = {
+        cat.lower(): phase
+        for phase, cats in cat_map.items()
+        for cat in cats
+    }
+    phases: dict[str, list[ArticleSummary]] = defaultdict(list)
+    for s in summaries:
+        phase = cat_to_phase.get(s.feed_category.lower(), "general")
+        phases[phase].append(s)
+    return dict(phases)
 
 
 # ─────────────────────────────────────────────
@@ -525,6 +550,130 @@ def stage3_report(summaries: list[ArticleSummary],
 
 
 # ─────────────────────────────────────────────
+# ETAPA 3 MULTI-FASE + ETAPA 4 SÍNTESIS
+# ─────────────────────────────────────────────
+
+def stage3_phases(
+    summaries: list[ArticleSummary],
+    date_str: str,
+    correlation: CorrelationContext | None = None,
+    trending: TrendingContext | None = None,
+    dry_run: bool = False,
+) -> dict[str, str]:
+    """Etapa 3 multi-fase: 4 llamadas LLM especializadas secuenciales."""
+    logger.info("═" * 50)
+    logger.info(f"ETAPA 3 MULTI-FASE — {config.REPORT_MODEL}")
+    logger.info("═" * 50)
+
+    valid = [s for s in summaries if s.error is None]
+    phases = group_by_phase(valid)
+
+    # Orden canónico; claves extra de PHASE_CATEGORY_MAP se agregan al final
+    canonical = ["vulnerability", "threat_intel", "latam", "general"]
+    extra = [p for p in (getattr(config, "PHASE_CATEGORY_MAP", {}) or {}) if p not in canonical]
+    phase_order = canonical + extra
+
+    phase_models     = getattr(config, "PHASE_MODELS",         {}) or {}
+    phase_max_tokens = getattr(config, "PHASE_MAX_TOKENS",     {}) or {}
+    phase_art_limits = getattr(config, "PHASE_ARTICLE_LIMITS", {}) or {}
+
+    phase_outputs: dict[str, str] = {}
+
+    for phase in phase_order:
+        arts = phases.get(phase, [])
+        if not arts:
+            logger.info(f"  Fase '{phase}': sin artículos — omitida")
+            continue
+
+        logger.info(f"  Fase '{phase}': {len(arts)} artículos")
+
+        if dry_run:
+            phase_outputs[phase] = (
+                f"# {phase.replace('_', ' ').title()} — {date_str}\n\n[DRY RUN]\n"
+            )
+            continue
+
+        model     = phase_models.get(phase) or config.REPORT_MODEL
+        max_tok   = phase_max_tokens.get(phase, 2500)
+        art_limit = phase_art_limits.get(phase, None)
+
+        phase_outputs[phase] = generate_phase_report(
+            phase=phase,
+            summaries=arts,
+            date_str=date_str,
+            model=model,
+            ollama_host=getattr(config, "OLLAMA_HOST", ""),
+            language=config.REPORT_LANGUAGE,
+            timeout=config.REPORT_TIMEOUT,
+            thinking=config.REPORT_THINKING,
+            num_ctx=config.REPORT_CTX,
+            num_threads=getattr(config, "OLLAMA_NUM_THREADS", 0),
+            max_tokens=max_tok,
+            provider=config.PROVIDER,
+            article_limit=art_limit,
+            correlation=correlation if phase in ("vulnerability", "threat_intel") else None,
+            trending=trending        if phase == "threat_intel"                  else None,
+        )
+
+    return phase_outputs
+
+
+def stage4_synthesis(
+    phase_outputs: dict[str, str],
+    summaries: list[ArticleSummary],
+    date_str: str,
+    dry_run: bool = False,
+) -> dict[str, str]:
+    """Etapa 4: síntesis maestra cross-domain + ensamblado del informe final."""
+    logger.info("═" * 50)
+    logger.info("ETAPA 4: Síntesis maestra cross-domain")
+    logger.info("═" * 50)
+
+    if dry_run:
+        synthesis_md = f"# Resumen Ejecutivo — {date_str}\n\n[DRY RUN]\n"
+    else:
+        phase_models = getattr(config, "PHASE_MODELS", {}) or {}
+        max_tok      = (getattr(config, "PHASE_MAX_TOKENS", {}) or {}).get("synthesis", 1500)
+        model        = phase_models.get("synthesis") or config.REPORT_MODEL
+        synthesis_md = generate_synthesis_report(
+            phase_outputs=phase_outputs,
+            date_str=date_str,
+            total_articles=len(summaries),
+            model=model,
+            ollama_host=getattr(config, "OLLAMA_HOST", ""),
+            language=config.REPORT_LANGUAGE,
+            timeout=config.REPORT_TIMEOUT,
+            thinking=config.REPORT_THINKING,
+            num_ctx=config.REPORT_CTX,
+            num_threads=getattr(config, "OLLAMA_NUM_THREADS", 0),
+            max_tokens=max_tok,
+            provider=config.PROVIDER,
+        )
+
+    # Síntesis al frente, luego las fases en orden canónico
+    phase_order = ["vulnerability", "threat_intel", "latam", "general"]
+    parts = [synthesis_md]
+    for phase in phase_order:
+        if phase in phase_outputs:
+            parts.append(phase_outputs[phase])
+
+    combined    = "\n\n---\n\n".join(parts)
+    total_feeds = len(set(s.feed_title for s in summaries))
+    dated_dir   = _dated_dir(date_str)
+
+    return save_report(
+        markdown_content=combined,
+        output_dir=dated_dir,
+        date_str=date_str,
+        total_articles=len(summaries),
+        total_feeds=total_feeds,
+        fmt=config.OUTPUT_FORMAT,
+        split=False,
+        provider=config.PROVIDER,
+    )
+
+
+# ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 
@@ -571,7 +720,11 @@ def main():
         summaries   = load_summaries_cache(date_str)
         ioc_paths   = export_iocs(summaries, date_str, _dated_dir(date_str))
         correlation = stage25_correlate(summaries)
-        paths       = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
+        if getattr(config, "PHASE_REPORTS", False):
+            phase_outputs = stage3_phases(summaries, date_str, correlation, dry_run=args.dry_run)
+            paths         = stage4_synthesis(phase_outputs, summaries, date_str, dry_run=args.dry_run)
+        else:
+            paths = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
         paths.update(ioc_paths)
         _print_result(paths)
         return
@@ -606,7 +759,13 @@ def main():
 
     correlation = stage25_correlate(summaries)
     trending    = stage26_history(summaries, date_str, correlation)
-    paths       = stage3_report(summaries, date_str, correlation, trending, dry_run=args.dry_run)
+
+    if getattr(config, "PHASE_REPORTS", False):
+        phase_outputs = stage3_phases(summaries, date_str, correlation, trending, dry_run=args.dry_run)
+        paths         = stage4_synthesis(phase_outputs, summaries, date_str, dry_run=args.dry_run)
+    else:
+        paths = stage3_report(summaries, date_str, correlation, trending, dry_run=args.dry_run)
+
     paths.update(ioc_paths)
     _print_result(paths)
 

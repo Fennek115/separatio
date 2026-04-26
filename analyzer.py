@@ -582,6 +582,359 @@ REGLAS:
 """
 
 
+# ─────────────────────────────────────────────────────────
+# MULTI-PHASE PROMPTS (Stage 3 especializado)
+# ─────────────────────────────────────────────────────────
+
+VULN_SYSTEM_PROMPT = """Eres un analista de vulnerabilidades con especialización en gestión de parches, CVSS, EPSS y CISA KEV.
+Tu foco: CVEs con explotación activa o alta probabilidad de explotación, vectores técnicos, ventanas de exposición y priorización de remediation.
+Redactas tablas precisas y análisis técnicos accionables para equipos de patch management y SOC.
+Escribe en español profesional. No uses frases genéricas sin sustancia técnica."""
+
+THREAT_SYSTEM_PROMPT = """Eres un analista senior de Cyber Threat Intelligence especializado en APTs, ransomware y análisis de campañas.
+Tu foco: TTPs (MITRE ATT&CK), atribución de actores, IOCs técnicos y análisis de campañas activas.
+Redactas perfiles de actores y análisis de campaña que permiten a un SOC detectar y responder.
+Escribe en español profesional. Incluye siempre referencias a técnicas ATT&CK cuando estén disponibles en los datos."""
+
+LATAM_SYSTEM_PROMPT = """Eres un analista de threat intelligence especializado en América Latina, con conocimiento del contexto regulatorio, sectores críticos (banca, gobierno, telecomunicaciones, infraestructura crítica) y actores que operan en la región.
+Redactas inteligencia relevante para CISOs y equipos de seguridad de organizaciones latinoamericanas.
+Escribe en español. Si los artículos están en inglés, traduce y contextualiza para el ecosistema LATAM."""
+
+GENERAL_SYSTEM_PROMPT = """Eres un editor de briefing ejecutivo de ciberseguridad. Tu rol: sintetizar noticias y tendencias de la industria en contexto útil para dirección y equipos de seguridad.
+Conciso, claro, sin jerga innecesaria. Escribe en español profesional."""
+
+SYNTHESIS_SYSTEM_PROMPT = """Eres un CISO con 20 años de experiencia. Recibes los análisis especializados de tu equipo de threat intelligence y los sintetizas en un resumen ejecutivo cross-domain.
+Tu objetivo: conectar vulnerabilidades, campañas activas y contexto regional en un único narrative accionable para dirección.
+Escribe en español. Sé directo y orientado a la acción. No repitas detalles que ya están en los análisis especializados."""
+
+
+def _format_phase_items(summaries: list[ArticleSummary],
+                        article_limit: int | None = None) -> tuple[list, list[str]]:
+    top = summaries[:article_limit] if article_limit else summaries
+    items = []
+    for i, s in enumerate(top, 1):
+        cves_str     = ", ".join(s.cves)            if s.cves            else "ninguno"
+        actors_str   = ", ".join(s.actors)          if s.actors          else "no identificados"
+        affected_str = ", ".join(s.affected_systems) if s.affected_systems else "no especificado"
+        iocs_str     = ", ".join(s.iocs[:8])        if s.iocs            else "ninguno"
+        items.append(
+            f"[{i}] [{s.severity}] [{s.threat_type}]\n"
+            f"    Título: {s.title}\n"
+            f"    Fuente: {s.feed_title} | URL: {s.url}\n"
+            f"    CVEs: {cves_str} | Actores: {actors_str}\n"
+            f"    Afectados: {affected_str} | IOCs: {iocs_str}\n"
+            f"    Análisis: {s.summary}"
+        )
+    return top, items
+
+
+def build_vuln_prompt(summaries: list[ArticleSummary], date_str: str,
+                      correlation=None, article_limit: int | None = 50) -> str:
+    sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
+    top, items = _format_phase_items(sorted_s, article_limit)
+
+    sev_dist  = Counter(s.severity for s in summaries)
+    sev_line  = " | ".join(f"{s}: {sev_dist[s]}" for s in ["Crítica","Alta","Media","Baja","Informativa"] if sev_dist.get(s))
+    cve_cnt   = Counter(cve for s in summaries for cve in s.cves)
+    top_cves  = ", ".join(f"{c} ({n}x)" for c, n in cve_cnt.most_common(10)) or "ninguno"
+    corr_block = f"\n{correlation.format_for_prompt()}\n" if correlation and correlation.has_signals() else ""
+    omitted    = len(summaries) - len(top)
+    note       = f"\n(Se muestran {len(top)} artículos de mayor severidad; {omitted} adicionales cubiertos en estadísticas.)\n" if omitted else ""
+
+    return f"""Fecha: {date_str}
+Artículos de vulnerabilidades: {len(summaries)} | Severidad: {sev_line}
+CVEs más mencionados: {top_cves}
+{corr_block}{note}
+ARTÍCULOS:
+{chr(10).join(items)}
+
+---
+Genera el Vulnerability Briefing en español. Usa este formato exacto:
+
+# Vulnerability Briefing — {date_str}
+
+## Panorama del Día
+(2-3 párrafos: (1) total CVEs, distribución de severidad, fuentes clave; (2) CVEs en KEV o con EPSS > 0.4; (3) urgencia de parcheo y ventana de exposición estimada)
+
+## CVEs Críticos y Altos
+(Tabla con TODOS los CVEs Críticos y Altos. Columnas: Sistema Afectado | CVE | CVSS/Severidad | EPSS | KEV | Explotabilidad | Vector de Ataque | Fuente | Acción Inmediata. Columna Fuente: [feed](URL) con la URL exacta del artículo.)
+
+## Análisis Técnico de CVEs Prioritarios
+(Por cada CVE crítico: párrafo con vector técnico de explotación, condiciones necesarias, impacto concreto, evidencia in-the-wild. Termina con [Fuente](URL).)
+
+## Parches Prioritarios
+(Lista ordenada por urgencia: sistema, CVE, razón específica de prioridad, [Fuente](URL).)
+
+REGLAS: No inventes CVEs ni datos. CVEs en KEV: señálalos explícitamente como confirmados. Usa las URLs exactas del campo URL de cada artículo."""
+
+
+def build_threat_prompt(summaries: list[ArticleSummary], date_str: str,
+                        correlation=None, trending=None,
+                        article_limit: int | None = 35) -> str:
+    sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
+    top, items = _format_phase_items(sorted_s, article_limit)
+
+    actor_cnt  = Counter(a for s in summaries for a in s.actors)
+    top_actors = ", ".join(f"{a} ({n}x)" for a, n in actor_cnt.most_common(8)) or "ninguno"
+    type_cnt   = Counter(s.threat_type for s in summaries if s.threat_type)
+    top_types  = ", ".join(f"{t} ({n})" for t, n in type_cnt.most_common(5))
+    corr_block  = f"\n{correlation.format_for_prompt()}\n" if correlation and correlation.has_signals() else ""
+    trend_block = f"\n{trending.format_for_prompt()}\n"    if trending and trending.has_data()        else ""
+    omitted     = len(summaries) - len(top)
+    note        = f"\n(Se muestran {len(top)} artículos; {omitted} adicionales de menor severidad.)\n" if omitted else ""
+
+    return f"""Fecha: {date_str}
+Artículos de threat intel / hacking: {len(summaries)} | Actores activos: {top_actors}
+Tipos dominantes: {top_types}
+{corr_block}{trend_block}{note}
+ARTÍCULOS:
+{chr(10).join(items)}
+
+---
+Genera el Threat Intelligence Digest en español. Usa este formato exacto:
+
+# Threat Intelligence Digest — {date_str}
+
+## Panorama de Amenazas
+(2-3 párrafos: actores más activos, TTPs dominantes observados, nivel de sofisticación y coordinación)
+
+## Campañas y Actores Activos
+(Por cada actor/campaña destacada: párrafo con nombre, tipo/origen, TTPs MITRE ATT&CK cuando aplique, objetivos o víctimas reportadas, IOCs disponibles, nivel de confianza en atribución. Incluye [Fuente](URL).)
+
+## IOCs de la Jornada
+(Tabla o lista agrupada: IPs maliciosas | Dominios C2 | Hashes de malware | URLs de distribución. Solo IOCs explícitamente mencionados en fuentes.)
+
+## Detección y Respuesta
+(5-7 acciones concretas para SOC/CERT: búsquedas SIEM sugeridas, bloqueos de IOCs, hunting queries basadas en TTPs observados)
+
+REGLAS: No inventes actores ni IOCs. Si hay actores persistentes en trending, señálalos. Incluye fuente para cada IOC."""
+
+
+def build_latam_prompt(summaries: list[ArticleSummary], date_str: str,
+                       article_limit: int | None = 60) -> str:
+    sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
+    top, items = _format_phase_items(sorted_s, article_limit)
+
+    return f"""Fecha: {date_str}
+Artículos con relevancia LATAM: {len(summaries)}
+
+ARTÍCULOS:
+{chr(10).join(items)}
+
+---
+Genera el análisis regional en español. Usa este formato exacto:
+
+# Contexto Regional LATAM — {date_str}
+
+## Incidentes y Amenazas Directas en la Región
+(Lo que ocurrió directamente en países de América Latina: países afectados, sectores, actores, fuente. Si no hay incidentes directos hoy, indicarlo explícitamente.)
+
+## Amenazas Globales con Impacto Regional Probable
+(De los artículos del día, cuáles tienen mayor probabilidad de afectar organizaciones latinoamericanas. Argumenta con base en: sectores objetivo del actor, TTPs compatibles con el perfil tecnológico de la región, presencia conocida del actor en LATAM.)
+
+## Sectores en Mayor Riesgo Hoy
+(Análisis breve por sector: banca/finanzas, gobierno, telecomunicaciones, infraestructura crítica)
+
+## Recomendaciones para Organizaciones LATAM
+(3-5 acciones concretas considerando el contexto regulatorio local y el stack tecnológico predominante en la región)
+
+REGLAS: Sé específico sobre países cuando los datos lo permitan. No extrapoles incidentes globales a LATAM sin justificación. Si hay poco material LATAM directo, es válido indicarlo y enfocarse en las amenazas globales más relevantes para la región."""
+
+
+def build_general_prompt(summaries: list[ArticleSummary], date_str: str,
+                         article_limit: int | None = 20) -> str:
+    sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
+    _top, items = _format_phase_items(sorted_s, article_limit)
+
+    return f"""Fecha: {date_str}
+Artículos generales de ciberseguridad: {len(summaries)}
+
+ARTÍCULOS:
+{chr(10).join(items)}
+
+---
+Genera el panorama general en español. Usa este formato exacto:
+
+# Panorama General de Ciberseguridad — {date_str}
+
+## Noticias Destacadas
+(Las 5-8 noticias más relevantes: qué pasó, por qué importa para equipos de seguridad, impacto esperado. [Fuente](URL) para cada una.)
+
+## Tendencias y Contexto de Industria
+(Patrones observados: cambios regulatorios, nuevas técnicas emergentes, movimientos del ecosistema relevantes)
+
+REGLAS: Prioriza noticias con impacto operacional directo sobre noticias corporativas. Sé conciso — este briefing es para dirección."""
+
+
+def build_synthesis_prompt(phase_outputs: dict[str, str], date_str: str,
+                           total_articles: int, provider: str = "api") -> str:
+    phase_labels = {
+        "vulnerability": "VULNERABILITY BRIEFING",
+        "threat_intel":  "THREAT INTELLIGENCE",
+        "latam":         "CONTEXTO LATAM",
+        "general":       "PANORAMA GENERAL",
+    }
+    # Ollama: excerpt shorter to fit 16K ctx; API providers: more context for better correlations
+    excerpt_len = 1500 if provider == "ollama" else 3000
+    sections = ""
+    for phase in ["vulnerability", "threat_intel", "latam", "general"]:
+        if phase not in phase_outputs:
+            continue
+        label   = phase_labels.get(phase, phase.upper())
+        excerpt = phase_outputs[phase][:excerpt_len]
+        if len(phase_outputs[phase]) > excerpt_len:
+            excerpt += "\n...[ver informe completo de la fase]"
+        sections += f"\n--- {label} ---\n{excerpt}\n"
+
+    return f"""Fecha: {date_str}
+Total artículos procesados: {total_articles}
+Fases completadas: {', '.join(phase_outputs.keys())}
+
+RESÚMENES ESPECIALIZADOS DE HOY:
+{sections}
+
+---
+Genera el RESUMEN EJECUTIVO cross-domain en español. Usa este formato exacto:
+
+# Resumen Ejecutivo — {date_str}
+
+## Nivel de Alerta: [CRÍTICO / ALTO / MEDIO / BAJO]
+(1 párrafo: justificación del nivel. El factor principal que determina la alerta de hoy.)
+
+## Prioridad #1 — Acción Inmediata
+(3-4 frases: la amenaza o vulnerabilidad más urgente del día. Qué hacer hoy, quién es responsable operacionalmente, cómo verificar que se ejecutó.)
+
+## Correlaciones Cross-Dominio
+(2-3 párrafos: conexiones entre los análisis. ¿Hay actores explotando CVEs del briefing de vulnerabilidades? ¿IOCs del threat intel aparecen en contexto LATAM? ¿Patrones que cambian la priorización de parches?)
+
+## Recomendación Estratégica
+(1 párrafo para dirección/CISO: tendencia dominante, posicionamiento recomendado, qué vigilar en los próximos 7 días)
+
+REGLAS: NO repitas detalles de los análisis especializados — el lector los tiene disponibles. Enfócate en CONEXIONES y PANORAMA GLOBAL. Si no hay correlaciones claras, indícalo honestamente."""
+
+
+def generate_phase_report(
+    phase: str,
+    summaries: list[ArticleSummary],
+    date_str: str,
+    model: str,
+    ollama_host: str,
+    language: str = "español",
+    timeout: int = 300,
+    thinking: bool = False,
+    num_ctx: int = 16384,
+    num_threads: int = 0,
+    max_tokens: int = 2500,
+    provider: str = "ollama",
+    article_limit: int | None = None,
+    correlation=None,
+    trending=None,
+) -> str:
+    """Genera el informe de una fase especializada (vuln / threat_intel / latam / general)."""
+    SYSTEMS = {
+        "vulnerability": VULN_SYSTEM_PROMPT,
+        "threat_intel":  THREAT_SYSTEM_PROMPT,
+        "latam":         LATAM_SYSTEM_PROMPT,
+        "general":       GENERAL_SYSTEM_PROMPT,
+    }
+    BUILDERS = {
+        "vulnerability": lambda: build_vuln_prompt(summaries, date_str, correlation, article_limit),
+        "threat_intel":  lambda: build_threat_prompt(summaries, date_str, correlation, trending, article_limit),
+        "latam":         lambda: build_latam_prompt(summaries, date_str, article_limit),
+        "general":       lambda: build_general_prompt(summaries, date_str, article_limit),
+    }
+    if phase not in SYSTEMS:
+        logger.warning(f"Fase desconocida '{phase}' — usando prompt general")
+        phase = "general"
+
+    system_prompt = SYSTEMS[phase]
+    prompt        = BUILDERS[phase]()
+
+    try:
+        if provider == "ollama":
+            import ollama
+            client  = ollama.Client(host=ollama_host, timeout=timeout)
+            options = _build_options(num_ctx, num_predict=max_tokens,
+                                     temperature=0.3, num_threads=num_threads)
+            stream  = client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": prompt},
+                ],
+                think=thinking,
+                options=options,
+                stream=True,
+            )
+            tokens: list[str] = []
+            total = 0
+            for chunk in stream:
+                token = chunk["message"]["content"]
+                if token:
+                    tokens.append(token)
+                    total += 1
+                    if total % 100 == 0:
+                        logger.info(f"  [{phase}] Generando... {total} tokens")
+            logger.info(f"  [{phase}] Generado: {total} tokens")
+            return _strip_llm_output("".join(tokens))
+        else:
+            result = _llm_chat(
+                system=system_prompt,
+                user=prompt,
+                provider=provider,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=0.3,
+                ollama_host=ollama_host,
+                timeout=timeout,
+                thinking=thinking,
+                num_ctx=num_ctx,
+                num_threads=num_threads,
+            )
+            logger.info(f"  [{phase}] Generado ({provider})")
+            return result
+    except Exception as e:
+        logger.error(f"Error en fase '{phase}': {e}")
+        return f"# Error en fase {phase}\n\n{e}"
+
+
+def generate_synthesis_report(
+    phase_outputs: dict[str, str],
+    date_str: str,
+    total_articles: int,
+    model: str,
+    ollama_host: str,
+    language: str = "español",
+    timeout: int = 300,
+    thinking: bool = False,
+    num_ctx: int = 16384,
+    num_threads: int = 0,
+    max_tokens: int = 1500,
+    provider: str = "ollama",
+) -> str:
+    """Stage 4: síntesis maestra cross-domain a partir de los outputs de las 4 fases."""
+    prompt = build_synthesis_prompt(phase_outputs, date_str, total_articles, provider)
+    try:
+        result = _llm_chat(
+            system=SYNTHESIS_SYSTEM_PROMPT,
+            user=prompt,
+            provider=provider,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0.2,
+            ollama_host=ollama_host,
+            timeout=timeout,
+            thinking=thinking,
+            num_ctx=num_ctx,
+            num_threads=num_threads,
+        )
+        logger.info(f"  [synthesis] Generado ({provider})")
+        return result
+    except Exception as e:
+        logger.error(f"Error en síntesis: {e}")
+        return f"# Error en síntesis\n\n{e}"
+
+
 def generate_weekly_report(
     summaries: list[ArticleSummary],
     dates: list[str],
