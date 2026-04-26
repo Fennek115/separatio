@@ -9,6 +9,19 @@ Applied to cybersecurity intelligence: the daily flood of security publications 
 
 Runs fully local with Ollama by default. Optionally routes Stage 2 and Stage 3 to Claude, OpenAI, or Gemini APIs — a single config change, no code modifications required.
 
+**Key features at a glance:**
+
+| | |
+|---|---|
+| **Multi-phase LLM report** | Vulnerability / Threat Intel / LATAM / General sections, each with a domain-expert prompt |
+| **IOC export (CSV + JSON)** | Every run writes `iocs-YYYY-MM-DD.csv` and `.json` — ready for SIEM ingestion or threat hunting |
+| **CISA KEV + EPSS enrichment** | Flags CVEs with confirmed active exploitation and exploitation-probability scores from FIRST.org |
+| **Cross-source correlation** | Deterministic CVE, IOC, and actor corroboration (≥2 independent sources) — no LLM inference |
+| **PDF deliverable** | Paginated report with table of contents, report ID (`TIR-YYYYMMDD-XXXX`), and SHA-256 integrity hash |
+| **Historical trending** | 14-day window for recurring actors, CVE re-appearances, and threat-type shifts |
+| **Provider-agnostic** | Ollama (local/private), OpenAI, Anthropic, or Gemini — swap with one config line |
+| **Weekly digest** | Cross-week view: top CVEs, actor trends, LATAM context, recommendations for the next 7 days |
+
 ---
 
 ## What it produces

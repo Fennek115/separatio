@@ -269,6 +269,19 @@ def _get_api_key(provider: str) -> str:
     return key
 
 
+# Truncation signals per provider
+_TRUNCATED = {"length", "max_tokens", "MAX_TOKENS", "RECITATION"}
+
+
+def _log_usage(provider: str, in_tok: int, out_tok: int, finish: str, max_tokens: int) -> None:
+    pct = int(out_tok / max_tokens * 100) if max_tokens else 0
+    msg = f"  tokens: {in_tok} in / {out_tok} out ({pct}% of limit, finish={finish})"
+    if finish in _TRUNCATED:
+        logger.warning(f"TRUNCADO — output cortado por límite de tokens. {msg}")
+    else:
+        logger.debug(msg)
+
+
 def _llm_chat(
     system: str,
     user: str,
@@ -296,6 +309,10 @@ def _llm_chat(
             think=thinking,
             options=options,
         )
+        in_tok  = response.get("prompt_eval_count", 0)
+        out_tok = response.get("eval_count", 0)
+        done_reason = response.get("done_reason", "stop")
+        _log_usage(provider, in_tok, out_tok, done_reason, max_tokens)
         return _strip_llm_output(response["message"]["content"])
 
     elif provider == "claude":
@@ -308,6 +325,8 @@ def _llm_chat(
             system=system,
             messages=[{"role": "user", "content": user}],
         )
+        _log_usage(provider, response.usage.input_tokens, response.usage.output_tokens,
+                   response.stop_reason, max_tokens)
         return _strip_llm_output(response.content[0].text)
 
     elif provider == "openai":
@@ -322,6 +341,9 @@ def _llm_chat(
                 {"role": "user",   "content": user},
             ],
         )
+        usage  = response.usage
+        finish = response.choices[0].finish_reason
+        _log_usage(provider, usage.prompt_tokens, usage.completion_tokens, finish, max_tokens)
         return _strip_llm_output(response.choices[0].message.content)
 
     elif provider == "gemini":
@@ -338,6 +360,9 @@ def _llm_chat(
                 temperature=temperature,
             ),
         )
+        meta   = response.usage_metadata
+        finish = response.candidates[0].finish_reason.name if response.candidates else "UNKNOWN"
+        _log_usage(provider, meta.prompt_token_count, meta.candidates_token_count, finish, max_tokens)
         return _strip_llm_output(response.text)
 
     else:
@@ -868,14 +893,19 @@ def generate_phase_report(
             )
             tokens: list[str] = []
             total = 0
+            last_chunk: dict = {}
             for chunk in stream:
+                last_chunk = chunk
                 token = chunk["message"]["content"]
                 if token:
                     tokens.append(token)
                     total += 1
                     if total % 100 == 0:
                         logger.info(f"  [{phase}] Generando... {total} tokens")
-            logger.info(f"  [{phase}] Generado: {total} tokens")
+            done_reason = last_chunk.get("done_reason", "stop")
+            in_tok = last_chunk.get("prompt_eval_count", 0)
+            _log_usage("ollama", in_tok, total, done_reason, max_tokens)
+            logger.info(f"  [{phase}] Generado: {total} tokens (finish={done_reason})")
             return _strip_llm_output("".join(tokens))
         else:
             result = _llm_chat(
