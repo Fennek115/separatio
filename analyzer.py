@@ -183,13 +183,13 @@ Genera DOS informes separados en {language}. Usa EXACTAMENTE estos marcadores de
 (3 párrafos: (1) panorama del día — total de CVEs, distribución de severidad, fuentes principales; (2) CVEs con explotación activa confirmada o alta probabilidad, con contexto de por qué son críticos; (3) urgencia de parcheo y ventana de exposición típica para estas vulnerabilidades)
 
 ## CVEs Críticos y Altos
-(Tabla con TODOS los CVEs Críticos y Altos reales mencionados en los artículos. Columnas: Sistema Afectado | CVE | CVSS/Severidad | Explotabilidad | Vector de Ataque | Acción Inmediata)
+(Tabla con TODOS los CVEs Críticos y Altos reales mencionados en los artículos. Columnas: Sistema Afectado | CVE | CVSS/Severidad | Explotabilidad | Vector de Ataque | Fuente | Acción Inmediata. En la columna Fuente usa el formato markdown [nombre_feed](URL) con la URL exacta del artículo del listado.)
 
 ## Análisis Técnico de Vulnerabilidades Prioritarias
-(Para cada CVE crítico: párrafo de 3-4 oraciones explicando el vector técnico de explotación, condiciones necesarias, impacto concreto si se explota, y si hay evidencia de explotación in-the-wild)
+(Para cada CVE crítico: párrafo de 3-4 oraciones explicando el vector técnico de explotación, condiciones necesarias, impacto concreto si se explota, y si hay evidencia de explotación in-the-wild. Termina cada párrafo con la referencia: [Fuente](URL_del_artículo).)
 
 ## Parches Prioritarios
-(Lista ordenada por urgencia. Para cada ítem: sistema, CVE, razón específica de prioridad, y enlace de referencia si está disponible en los datos)
+(Lista ordenada por urgencia. Para cada ítem: sistema, CVE, razón específica de prioridad, y enlace de referencia usando la URL exacta del artículo correspondiente en formato markdown [Fuente](URL). Todas las URLs están disponibles en el campo URL de cada artículo del listado anterior.)
 
 ===THREAT_INTEL_DIGEST===
 

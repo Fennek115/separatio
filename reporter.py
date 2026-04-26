@@ -101,6 +101,23 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             padding-top: 0.9rem;
             line-height: 2;
         }}
+        .cover-quote {{
+            font-size: 8.5pt;
+            font-style: italic;
+            color: #5b21b6;
+            margin: 1.8rem 0 0.6rem;
+            padding-left: 0.9rem;
+            border-left: 2px solid #c4b5fd;
+            line-height: 1.55;
+        }}
+        .cover-quote cite {{
+            font-style: normal;
+            font-size: 7pt;
+            color: #9ca3af;
+            display: block;
+            margin-top: 0.3rem;
+            letter-spacing: 0.02em;
+        }}
         .cover-tlp {{
             display: inline-block;
             border: 1px solid #c4b5fd;
@@ -182,7 +199,13 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             border-collapse: collapse;
             margin-bottom: 0.9rem;
             font-size: 8.5pt;
+        }}
+        thead {{
+            display: table-header-group;
+        }}
+        tr {{
             page-break-inside: avoid;
+            page-break-after: auto;
         }}
         th {{
             background: #1e1b4b;
@@ -210,6 +233,16 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
             margin-bottom: 0.6rem;
         }}
         .section-break {{ page-break-before: always; }}
+        .colophon {{
+            margin-top: 3.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid #e5e7eb;
+            text-align: center;
+            font-size: 7.5pt;
+            font-style: italic;
+            color: #9ca3af;
+            letter-spacing: 0.04em;
+        }}
     </style>
 </head>
 <body>
@@ -218,14 +251,22 @@ PDF_HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="cover-label">Daily Briefing</div>
         <h1>Threat Intelligence<br>Report</h1>
         <div class="cover-date">{date}</div>
+        <div class="cover-quote">
+            "Separa la Tierra del Fuego, lo sutil de lo burdo,<br>pero s&eacute; prudente y circunspecto cuando lo hagas."
+            <cite>— Tabula Smaragdina, Hermes Trismegistus</cite>
+        </div>
         <div class="cover-meta">
             Generado: {generated_at}<br>
-            Articulos analizados: {total_articles} &nbsp;·&nbsp; Fuentes: {total_feeds}<br>
-            Modelo: {provider}
+            Art&iacute;culos analizados: {total_articles} &nbsp;&middot;&nbsp; Fuentes: {total_feeds}<br>
+            An&aacute;lisis automatizado &nbsp;&middot;&nbsp; Threat Intelligence Pipeline
         </div>
         <div class="cover-tlp">TLP:WHITE</div>
     </div>
     {body}
+    <div class="colophon">
+        "Lo que tuve que decir sobre el funcionamiento del Sol ha concluido."
+        &nbsp;&mdash;&nbsp; Tabula Smaragdina
+    </div>
 </body>
 </html>"""
 
@@ -347,12 +388,21 @@ def markdown_to_html_body(markdown_text: str) -> str:
     list_tag: str | None = None   # "ul" | "ol" | None
     in_code_block = False
     in_table = False
+    in_thead = False   # True mientras no se haya visto la fila separadora ---
 
     def close_list() -> None:
         nonlocal list_tag
         if list_tag:
             html_lines.append(f"</{list_tag}>")
             list_tag = None
+
+    def close_table() -> None:
+        nonlocal in_table, in_thead
+        if in_table:
+            html_lines.append("</thead>" if in_thead else "</tbody>")
+            html_lines.append("</table>")
+            in_table = False
+            in_thead = False
 
     for line in lines:
         # Bloques de código
@@ -374,17 +424,31 @@ def markdown_to_html_body(markdown_text: str) -> str:
         if "|" in line and line.strip().startswith("|"):
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             if not in_table:
-                html_lines.append("<table>")
+                close_list()
+                html_lines.append("<table><thead>")
                 in_table = True
-                html_lines.append("<tr>" + "".join(f"<th>{c}</th>" for c in cells) + "</tr>")
-            elif all(re.match(r"[-:]+", c) for c in cells):
-                pass
+                in_thead = True
+                html_lines.append(
+                    "<tr>" + "".join(f"<th>{_inline(c)}</th>" for c in cells) + "</tr>"
+                )
+            elif in_thead and all(re.match(r"[-:]+", c) for c in cells):
+                # fila separadora de Markdown (|---|---|): cierra thead, abre tbody
+                html_lines.append("</thead><tbody>")
+                in_thead = False
+            elif in_thead:
+                # fila de datos antes de ver el separador (tabla sin separador)
+                html_lines.append("</thead><tbody>")
+                in_thead = False
+                html_lines.append(
+                    "<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in cells) + "</tr>"
+                )
             else:
-                html_lines.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+                html_lines.append(
+                    "<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in cells) + "</tr>"
+                )
             continue
         elif in_table:
-            html_lines.append("</table>")
-            in_table = False
+            close_table()
 
         # Separadores
         if re.match(r"^---+$", line.strip()):
@@ -433,8 +497,7 @@ def markdown_to_html_body(markdown_text: str) -> str:
         html_lines.append(f"<p>{_inline(line)}</p>")
 
     close_list()
-    if in_table:
-        html_lines.append("</table>")
+    close_table()
 
     return "\n".join(html_lines)
 
@@ -533,12 +596,10 @@ def save_report(markdown_content: str, output_dir: str,
                 split: bool = True, provider: str = "",
                 filename_prefix: str | None = None) -> dict[str, str]:
     """
-    Guarda el informe en Markdown y/o HTML.
-    Si split=True y el contenido contiene marcadores de sección, genera archivos
-    separados para el Vulnerability Briefing y el Threat Intel Digest.
-    Siempre genera también el informe completo (threat-briefing-*) como fallback.
+    Guarda el informe bajo output_dir (carpeta fechada).
+    - PDF  → output_dir/               (entregable final)
+    - MD/HTML → output_dir/reports/    (fuentes)
     filename_prefix sobreescribe el prefijo del archivo "full" (usado para weekly).
-    Retorna dict con todas las rutas generadas.
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -547,7 +608,6 @@ def save_report(markdown_content: str, output_dir: str,
 
     sections = split_report_sections(markdown_content) if split else {"full": markdown_content}
 
-    # Mapeo de clave de sección → prefijo de archivo
     file_prefixes = {
         "vulnerability": "vuln-briefing",
         "threat_intel":  "threat-digest",
@@ -558,18 +618,22 @@ def save_report(markdown_content: str, output_dir: str,
     write_html = fmt in ("html", "both", "all")
     write_pdf  = fmt in ("pdf", "all")
 
+    reports_dir = os.path.join(output_dir, "reports")
+    if write_md or write_html:
+        Path(reports_dir).mkdir(parents=True, exist_ok=True)
+
     for key, content in sections.items():
         prefix = file_prefixes[key]
 
         if write_md:
-            path = os.path.join(output_dir, f"{prefix}-{safe_date}.md")
+            path = os.path.join(reports_dir, f"{prefix}-{safe_date}.md")
             _write_report_file(content, path, "md", date_str, generated_at,
                                total_articles, total_feeds, provider)
             paths[f"{key}_markdown"] = path
             logger.info(f"Informe Markdown ({key}): {path}")
 
         if write_html:
-            path = os.path.join(output_dir, f"{prefix}-{safe_date}.html")
+            path = os.path.join(reports_dir, f"{prefix}-{safe_date}.html")
             _write_report_file(content, path, "html", date_str, generated_at,
                                total_articles, total_feeds, provider)
             paths[f"{key}_html"] = path
@@ -582,17 +646,16 @@ def save_report(markdown_content: str, output_dir: str,
             paths[f"{key}_pdf"] = path
             logger.info(f"Informe PDF ({key}): {path}")
 
-    # Si se generaron secciones separadas, guardar también el informe completo
-    # (sin marcadores) para compatibilidad con scripts externos
+    # Informe completo combinado cuando se generaron secciones separadas
     if "vulnerability" in sections:
         combined = sections["vulnerability"] + "\n\n---\n\n" + sections["threat_intel"]
         if write_md:
-            path = os.path.join(output_dir, f"threat-briefing-{safe_date}.md")
+            path = os.path.join(reports_dir, f"threat-briefing-{safe_date}.md")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(combined)
             paths["full_markdown"] = path
         if write_html:
-            path = os.path.join(output_dir, f"threat-briefing-{safe_date}.html")
+            path = os.path.join(reports_dir, f"threat-briefing-{safe_date}.html")
             _write_report_file(combined, path, "html", date_str, generated_at,
                                total_articles, total_feeds, provider)
             paths["full_html"] = path

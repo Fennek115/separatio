@@ -50,13 +50,20 @@ logger = logging.getLogger(__name__)
 # CACHÉ JSON
 # ─────────────────────────────────────────────
 
+def _dated_dir(date_str: str) -> str:
+    """Carpeta diaria/semanal: OUTPUT_DIR/YYYY-MM-DD/ o OUTPUT_DIR/YYYY-WXX/"""
+    safe = date_str.replace(" ", "_").replace("/", "-")
+    path = os.path.join(config.OUTPUT_DIR, safe)
+    Path(path).mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _cache_path(date_str: str) -> str:
     safe = date_str.replace(" ", "_").replace("/", "-")
-    return os.path.join(config.OUTPUT_DIR, f"summaries-cache-{safe}.json")
+    return os.path.join(_dated_dir(date_str), f"summaries-cache-{safe}.json")
 
 
 def save_summaries_cache(summaries: list[ArticleSummary], date_str: str) -> str:
-    Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
     path = _cache_path(date_str)
     with open(path, "w", encoding="utf-8") as f:
         json.dump([s.__dict__ for s in summaries], f, ensure_ascii=False, indent=2)
@@ -66,6 +73,13 @@ def save_summaries_cache(summaries: list[ArticleSummary], date_str: str) -> str:
 
 def load_summaries_cache(date_str: str) -> list[ArticleSummary]:
     path = _cache_path(date_str)
+    if not os.path.exists(path):
+        # Fallback: estructura plana antigua (OUTPUT_DIR/summaries-cache-DATE.json)
+        safe = date_str.replace(" ", "_").replace("/", "-")
+        old_path = os.path.join(config.OUTPUT_DIR, f"summaries-cache-{safe}.json")
+        if os.path.exists(old_path):
+            logger.info(f"Usando caché legacy: {old_path}")
+            path = old_path
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     known = ArticleSummary.__dataclass_fields__
@@ -160,7 +174,10 @@ def export_iocs(
     safe_date = date_str.replace(" ", "_").replace("/", "-")
     paths: dict[str, str] = {}
 
-    csv_path = os.path.join(output_dir, f"iocs-{safe_date}.csv")
+    iocs_dir = os.path.join(output_dir, "iocs")
+    Path(iocs_dir).mkdir(parents=True, exist_ok=True)
+
+    csv_path = os.path.join(iocs_dir, f"iocs-{safe_date}.csv")
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f, fieldnames=["date", "ioc", "type", "severity", "title", "feed", "cves"]
@@ -173,7 +190,7 @@ def export_iocs(
     for row in unique:
         by_type[row["type"]].append(row)
 
-    json_path = os.path.join(output_dir, f"iocs-{safe_date}.json")
+    json_path = os.path.join(iocs_dir, f"iocs-{safe_date}.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(dict(by_type), f, ensure_ascii=False, indent=2)
     paths["iocs_json"] = json_path
@@ -235,9 +252,10 @@ def run_weekly(days: int = 7) -> None:
     )
 
     total_feeds = len(set(s.feed_title for s in all_summaries))
+    weekly_dir = _dated_dir(week_label)
     paths = save_report(
         markdown_content=markdown,
-        output_dir=config.OUTPUT_DIR,
+        output_dir=weekly_dir,
         date_str=week_label,
         total_articles=len(all_summaries),
         total_feeds=total_feeds,
@@ -247,7 +265,7 @@ def run_weekly(days: int = 7) -> None:
         filename_prefix="weekly-briefing",
     )
 
-    ioc_paths = export_iocs(all_summaries, week_label, config.OUTPUT_DIR)
+    ioc_paths = export_iocs(all_summaries, week_label, weekly_dir)
     paths.update(ioc_paths)
     _print_result(paths)
 
@@ -496,7 +514,7 @@ def stage3_report(summaries: list[ArticleSummary],
     total_feeds = len(set(s.feed_title for s in summaries))
     return save_report(
         markdown_content=markdown,
-        output_dir=config.OUTPUT_DIR,
+        output_dir=_dated_dir(date_str),
         date_str=date_str,
         total_articles=len(summaries),
         total_feeds=total_feeds,
@@ -551,7 +569,7 @@ def main():
     if args.report_only:
         logger.info("Modo --report-only: cargando resúmenes desde caché...")
         summaries   = load_summaries_cache(date_str)
-        ioc_paths   = export_iocs(summaries, date_str, config.OUTPUT_DIR)
+        ioc_paths   = export_iocs(summaries, date_str, _dated_dir(date_str))
         correlation = stage25_correlate(summaries)
         paths       = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
         paths.update(ioc_paths)
@@ -578,7 +596,7 @@ def main():
     summaries = stage2_summarize(articles, dry_run=args.dry_run)
     summaries = dedup_by_cves(summaries)
     save_summaries_cache(summaries, date_str)
-    ioc_paths = export_iocs(summaries, date_str, config.OUTPUT_DIR)
+    ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str))
 
     if config.MARK_AS_READ and not args.no_mark_read:
         client.mark_as_read([a["article_id"] for a in articles])
