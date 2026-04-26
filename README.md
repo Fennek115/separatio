@@ -178,18 +178,18 @@ MINIFLUX_API_TOKEN = "your-api-token"
 ```python
 PROVIDER           = "openai"
 OPENAI_API_KEY     = "sk-..."      # or: export OPENAI_API_KEY=sk-...
-SUMMARY_MODEL      = "gpt-4o-mini"
-REPORT_MODEL       = "gpt-4o"
+SUMMARY_MODEL      = "gpt-4.1-mini"   # 200K TPM, 1M ctx — fits 120 articles in Stage 2
+REPORT_MODEL       = "gpt-4.1"
 ARTICLE_MAX_TOKENS = 2500
 PARALLEL_WORKERS   = 8
 PHASE_REPORTS      = True
 
 PHASE_MODELS = {
-    "vulnerability": "gpt-4o",
-    "threat_intel":  "gpt-4o",
-    "latam":         "gpt-4o",
-    "general":       "gpt-4o-mini",
-    "synthesis":     "gpt-4o",
+    "vulnerability": "gpt-4.1",
+    "threat_intel":  "gpt-4.1",
+    "latam":         "gpt-4.1-mini",
+    "general":       "gpt-4.1-mini",
+    "synthesis":     "gpt-4.1",
 }
 
 MINIFLUX_URL       = "http://localhost:8080"
@@ -388,7 +388,7 @@ PHASE_MODELS = {
     "threat_intel":  "claude-sonnet-4-6",
     "latam":         "claude-haiku-4-5-20251001",   # cheaper — shorter output
     "general":       "claude-haiku-4-5-20251001",
-    "synthesis":     "claude-sonnet-4-6",
+    "synthesis":     "claude-opus-4-7",              # deeper cross-domain reasoning
 }
 ```
 
@@ -401,23 +401,23 @@ pip install openai
 ```python
 PROVIDER           = "openai"
 OPENAI_API_KEY     = "sk-..."        # or: export OPENAI_API_KEY=sk-...
-SUMMARY_MODEL      = "gpt-4o-mini"
-REPORT_MODEL       = "gpt-4o"
+SUMMARY_MODEL      = "gpt-4.1-mini"  # 200K TPM, 1M ctx — fits 120 articles in Stage 2
+REPORT_MODEL       = "gpt-4.1"
 ARTICLE_MAX_TOKENS = 2500
 REPORT_MAX_TOKENS  = 10000
 PARALLEL_WORKERS   = 8
 PHASE_REPORTS      = True
 
 PHASE_MODELS = {
-    "vulnerability": "gpt-4o",
-    "threat_intel":  "gpt-4o",
-    "latam":         "gpt-4o",        # gpt-4o-mini has weaker Spanish
-    "general":       "gpt-4o-mini",
-    "synthesis":     "gpt-4o",
+    "vulnerability": "gpt-4.1",
+    "threat_intel":  "gpt-4.1",
+    "latam":         "gpt-4.1-mini",
+    "general":       "gpt-4.1-mini",
+    "synthesis":     "gpt-4.1",
 }
 ```
 
-> **Rate limits:** `gpt-4o` on Tier 1 has 30K TPM — not enough for 120 articles in Stage 2. Use `gpt-4o-mini` for `SUMMARY_MODEL`. For `REPORT_MODEL` and `PHASE_MODELS`, `gpt-4.1` offers 200K TPM and is a good alternative.
+> **Rate limits:** `gpt-4o` on Tier 1 has only 30K TPM — not enough for 120 articles in Stage 2. `gpt-4.1-mini` has 200K TPM and 1M context window, making it the better choice at any tier.
 
 ### Gemini (Google)
 
@@ -429,16 +429,16 @@ pip install google-generativeai
 PROVIDER           = "gemini"
 GEMINI_API_KEY     = "AIza..."       # or: export GEMINI_API_KEY=AIza...
 SUMMARY_MODEL      = "gemini-2.0-flash"
-REPORT_MODEL       = "gemini-1.5-pro"
+REPORT_MODEL       = "gemini-2.5-pro"
 ARTICLE_MAX_TOKENS = 2500
 REPORT_MAX_TOKENS  = 10000
 PARALLEL_WORKERS   = 8
 PHASE_REPORTS      = True
 
 PHASE_MODELS = {
-    "vulnerability": "gemini-1.5-pro",
-    "threat_intel":  "gemini-1.5-pro",
-    "latam":         "gemini-1.5-pro",
+    "vulnerability": "gemini-2.5-pro",
+    "threat_intel":  "gemini-2.5-pro",
+    "latam":         "gemini-2.0-flash",
     "general":       "gemini-2.0-flash",
     "synthesis":     "gemini-2.5-pro",   # 1M context, best cross-domain synthesis
 }
@@ -446,31 +446,34 @@ PHASE_MODELS = {
 
 ### Multi-phase reports (cloud providers)
 
-When `PHASE_REPORTS = True` (default for cloud), Stage 3 splits into 4 specialized LLM calls instead of one large prompt, each with a domain-expert persona:
-
-| Phase | Category sources | Focus |
-|-------|-----------------|-------|
-| **Vulnerability** | `Vulnerability` | CVE table, CVSS/EPSS/KEV, patch priority, technical analysis |
-| **Threat Intel** | `Threat Intel`, `Hacking & Research` | APT campaigns, actors, TTPs (MITRE), IOCs |
-| **LATAM** | `LATAM` | Regional incidents, global threats with LATAM impact, sector risk |
-| **General** | `Cibersecurity` | News headlines, industry trends, executive summary fodder |
-
-Stage 4 then runs a master synthesis call that receives all 4 outputs and produces the cross-domain executive summary (correlations, #1 priority, strategic recommendation).
-
-**Auto-scaling with new feeds:** any feed added to Miniflux in a known category is automatically routed to the right phase. New categories fall back to `general`. To assign a new category to a specific phase, add it to `PHASE_CATEGORY_MAP` in `config.py` — no code changes required.
+Phases, category routing, and auto-scaling are described in the [Pipeline](#pipeline) section above. The table below covers model selection and token budgets.
 
 #### Recommended models per phase
 
-| Phase | OpenAI | Claude | Notes |
-|-------|--------|--------|-------|
-| Stage 2 — extraction | `gpt-4o-mini` | `claude-haiku-4-5-20251001` | High-volume JSON, fast and cheap |
-| Vulnerability | `gpt-4o` | `claude-sonnet-4-6` | Technical precision for CVE analysis |
-| Threat Intel | `gpt-4o` | `claude-sonnet-4-6` | Narrative synthesis, actor attribution |
-| LATAM | `gpt-4o` | `claude-haiku-4-5-20251001` | Regional context; haiku has good Spanish |
-| General | `gpt-4o-mini` | `claude-haiku-4-5-20251001` | News summary, shorter output |
-| Stage 4 — synthesis | `gpt-4o` | `claude-sonnet-4-6` | Cross-domain executive summary |
+| Phase | OpenAI | Claude | Gemini | Notes |
+|-------|--------|--------|--------|-------|
+| Stage 2 — extraction | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.0-flash` | High-volume JSON; fast and cheap |
+| Vulnerability | `gpt-4.1` | `claude-sonnet-4-6` | `gemini-2.5-pro` | Technical precision for CVE analysis |
+| Threat Intel | `gpt-4.1` | `claude-sonnet-4-6` | `gemini-2.5-pro` | Narrative synthesis, actor attribution |
+| LATAM | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.0-flash` | Regional context; lighter model sufficient |
+| General | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.0-flash` | News summary; shorter output |
+| Stage 4 — synthesis | `gpt-4.1` | `claude-opus-4-7` | `gemini-2.5-pro` | Cross-domain reasoning benefits from the strongest model |
 
 Set these in `PHASE_MODELS` inside `config.py` (comments in the file show the exact values to copy).
+
+#### Recommended output token limits per phase
+
+`PHASE_MAX_TOKENS` controls how long each phase output can be. Longer = more detail but higher cost.
+
+| Phase | Ollama CPU | Ollama GPU | Cloud |
+|-------|-----------|-----------|-------|
+| `vulnerability` | 1500 | 2000 | 2500 |
+| `threat_intel` | 1500 | 2000 | 2500 |
+| `latam` | 800 | 1200 | 1500 |
+| `general` | 600 | 800 | 1000 |
+| `synthesis` | 800 | 1200 | 2000 |
+
+The defaults in `config.py` are set for cloud. For Ollama CPU-only, lower all values by ~40% to reduce generation time.
 
 #### Ollama with GPU
 
@@ -619,7 +622,7 @@ All settings live in `config.py`.
 | `PHASE_REPORTS` | `True` | Multi-phase mode. Set `False` for legacy single-prompt (Ollama CPU-only) |
 | `PHASE_CATEGORY_MAP` | see config | Maps phase names → Miniflux category names. Unmapped categories → `general` |
 | `PHASE_MODELS` | all `None` | Per-phase model override. `None` falls back to `REPORT_MODEL`. See config comments for OpenAI/Claude values. |
-| `PHASE_MAX_TOKENS` | see config | Output token limit per phase (vuln/threat: 2500, latam: 1500, general: 1000, synthesis: 1500) |
+| `PHASE_MAX_TOKENS` | see config | Output token limit per phase. See [recommended values by provider](#recommended-output-token-limits-per-phase). |
 | `PHASE_ARTICLE_LIMITS` | see config | Max articles sent to each phase prompt (top N by severity) |
 | `ANTHROPIC_API_KEY` | `""` | Required when `PROVIDER=claude` |
 | `OPENAI_API_KEY` | `""` | Required when `PROVIDER=openai` |

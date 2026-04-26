@@ -20,8 +20,7 @@ PROVIDER = "ollama"
 # Nombres de modelo según el proveedor elegido:
 #   ollama  → "qwen3.5:4b" / "qwen3.5:9b"
 #   claude  → "claude-haiku-4-5-20251001" / "claude-sonnet-4-6"
-#   openai  → "gpt-4.1-mini" / "gpt-4.1-mini"   ← recomendado: 200K TPM, 1M ctx, 32K output
-#             "gpt-4o-mini"  / "gpt-4o"          ← gpt-4o tiene 30K TPM en Tier 1 (insuficiente con 120 arts)
+#   openai  → "gpt-4.1-mini" / "gpt-4.1"         ← recomendado: 200K TPM, 1M ctx; gpt-4o tiene 30K TPM (insuficiente con 120 arts)
 #   gemini  → "gemini-2.0-flash" / "gemini-2.5-pro"
 
 # API keys — lee de variable de entorno o edita directamente aquí
@@ -199,14 +198,19 @@ PHASE_CATEGORY_MAP = {
 # Modelo por fase. None → usa REPORT_MODEL como fallback.
 #
 # OpenAI:
-#   "vulnerability": "gpt-4o",    "threat_intel": "gpt-4o",
-#   "latam":         "gpt-4o",    "general":      "gpt-4o-mini",
-#   "synthesis":     "gpt-4o"
+#   "vulnerability": "gpt-4.1",      "threat_intel": "gpt-4.1",
+#   "latam":         "gpt-4.1-mini", "general":      "gpt-4.1-mini",
+#   "synthesis":     "gpt-4.1"
 #
 # Claude:
 #   "vulnerability": "claude-sonnet-4-6",        "threat_intel": "claude-sonnet-4-6",
 #   "latam":         "claude-haiku-4-5-20251001", "general":      "claude-haiku-4-5-20251001",
-#   "synthesis":     "claude-sonnet-4-6"
+#   "synthesis":     "claude-opus-4-7"            # síntesis cross-domain se beneficia del modelo más potente
+#
+# Gemini:
+#   "vulnerability": "gemini-2.5-pro",    "threat_intel": "gemini-2.5-pro",
+#   "latam":         "gemini-2.0-flash",  "general":      "gemini-2.0-flash",
+#   "synthesis":     "gemini-2.5-pro"
 #
 # Ollama GPU: dejar todos en None → usa REPORT_MODEL para todas las fases
 PHASE_MODELS: dict = {
