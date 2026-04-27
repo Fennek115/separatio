@@ -67,11 +67,11 @@ Responde SOLO con este JSON (sin bloques markdown, sin texto adicional):
 {{
   "threat_type": "tipo de amenaza (ej: Ransomware, APT, CVE, Phishing, DDoS, Supply Chain, Malware, Vulnerability, Data Breach, Hacktivism, Otro)",
   "severity": "Crítica|Alta|Media|Baja|Informativa",
-  "actors": ["lista de actores/grupos/países conocidos, vacío si no aplica"],
-  "cves": ["lista de CVE-XXXX-XXXXX mencionados, vacío si no hay"],
-  "affected_systems": ["sistemas/productos/sectores afectados"],
+  "actors": ["máx 5 actores/grupos/países conocidos, vacío si no aplica"],
+  "cves": ["máx 10 CVE-XXXX-XXXXX mencionados, vacío si no hay"],
+  "affected_systems": ["máx 5 sistemas/productos/sectores más relevantes"],
   "summary": "Análisis técnico en 4-5 oraciones en español: qué ocurrió, cómo funciona la técnica/vulnerabilidad (TTPs/MITRE), sistemas o sectores afectados, nivel de explotación activa, e impacto potencial.",
-  "iocs": ["IPs, dominios, hashes SHA256/MD5, URLs o firmas de red mencionados explícitamente"]
+  "iocs": ["máx 10 IPs, dominios, hashes SHA256/MD5, URLs o firmas de red mencionados explícitamente"]
 }}"""
 
 
