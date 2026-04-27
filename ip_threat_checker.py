@@ -2,7 +2,7 @@
 """
 SOC IP Threat Intelligence Checker
 Verifica IPs contra AbuseIPDB, VirusTotal, GreyNoise, AlienVault OTX,
-URLhaus y Feodo Tracker (abuse.ch)
+URLhaus y ThreatFox (abuse.ch)
 Uso: python3 ip_threat_checker.py [archivo.txt]
 """
 
@@ -20,6 +20,7 @@ load_dotenv()
 ABUSEIPDB_API_KEY  = os.environ.get("ABUSEIPDB_API_KEY",  "TU_API_KEY_AQUI")
 VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "TU_API_KEY_AQUI")
 OTX_API_KEY        = os.environ.get("OTX_API_KEY",        "TU_API_KEY_AQUI")
+ABUSECH_API_KEY    = os.environ.get("ABUSECH_API_KEY",    "TU_API_KEY_AQUI")  # https://auth.abuse.ch — vale para URLhaus y ThreatFox
 IP_FILE            = "ips.txt"
 OUTPUT_FILE        = f"threat_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
@@ -39,7 +40,7 @@ api_stats = {
     "greynoise":  {"ok": 0, "error": 0, "skipped": 0},
     "otx":        {"ok": 0, "error": 0, "skipped": 0},
     "urlhaus":    {"ok": 0, "error": 0, "skipped": 0},
-    "feodo":      {"ok": 0, "error": 0, "skipped": 0},
+    "threatfox":  {"ok": 0, "error": 0, "skipped": 0},
 }
 
 # ─── CATEGORÍAS ABUSEIPDB ─────────────────────────────────
@@ -77,16 +78,20 @@ def verify_api_keys():
     print(f"{BOLD}[*] Verificando conexion con APIs...{RESET}")
     results = {}
 
-    checks = [
-        ("abuseipdb",  ABUSEIPDB_API_KEY,  "https://api.abuseipdb.com/api/v2/check",
-         {"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"}, {"ipAddress": "8.8.8.8", "maxAgeInDays": 1}, "GET"),
-        ("virustotal", VIRUSTOTAL_API_KEY,  "https://www.virustotal.com/api/v3/ip_addresses/8.8.8.8",
-         {"x-apikey": VIRUSTOTAL_API_KEY}, {}, "GET"),
-        ("otx",        OTX_API_KEY,         "https://otx.alienvault.com/api/v1/indicators/IPv4/8.8.8.8/general",
-         {"X-OTX-API-KEY": OTX_API_KEY}, {}, "GET"),
+    # APIs con key — GET
+    keyed_checks = [
+        ("abuseipdb",  ABUSEIPDB_API_KEY,
+         "https://api.abuseipdb.com/api/v2/check",
+         {"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"},
+         {"ipAddress": "8.8.8.8", "maxAgeInDays": 1}),
+        ("virustotal", VIRUSTOTAL_API_KEY,
+         "https://www.virustotal.com/api/v3/ip_addresses/8.8.8.8",
+         {"x-apikey": VIRUSTOTAL_API_KEY}, {}),
+        ("otx",        OTX_API_KEY,
+         "https://otx.alienvault.com/api/v1/indicators/IPv4/8.8.8.8/general",
+         {"X-OTX-API-KEY": OTX_API_KEY}, {}),
     ]
-
-    for name, key, url, headers, params, method in checks:
+    for name, key, url, headers, params in keyed_checks:
         if key == "TU_API_KEY_AQUI":
             print(f"    {name:12s} -> {YELLOW}[SKIP] API key no configurada{RESET}")
             results[name] = False
@@ -109,7 +114,7 @@ def verify_api_keys():
             print(f"    {name:12s} -> {RED}[ERROR] Sin conexion: {e}{RESET}")
             results[name] = False
 
-    # GreyNoise no requiere key (community API)
+    # GreyNoise — sin key
     try:
         r = requests.get("https://api.greynoise.io/v3/community/8.8.8.8", timeout=10)
         if r.status_code in (200, 404):
@@ -125,25 +130,56 @@ def verify_api_keys():
         print(f"    {'greynoise':12s} -> {RED}[ERROR] Sin conexion: {e}{RESET}")
         results["greynoise"] = False
 
-    # URLhaus y Feodo no requieren key
-    for name, url in [("urlhaus", "https://urlhaus-api.abuse.ch/v1/host/"),
-                      ("feodo",   "https://feodotracker.abuse.ch/api/v1/host/")]:
-        try:
-            r = requests.post(url, data={"host": "8.8.8.8"}, timeout=10)
-            if r.status_code == 200:
-                print(f"    {name:12s} -> {GREEN}[OK] Conectado correctamente — HTTP {r.status_code}{RESET}")
-                results[name] = True
-            else:
-                print(f"    {name:12s} -> {RED}[ERROR] Respuesta inesperada — HTTP {r.status_code}{RESET}")
-                results[name] = False
-        except Exception as e:
-            print(f"    {name:12s} -> {RED}[ERROR] Sin conexion: {e}{RESET}")
+    # URLhaus y ThreatFox — misma key (ABUSECH_API_KEY)
+    if ABUSECH_API_KEY == "TU_API_KEY_AQUI":
+        for name in ("urlhaus", "threatfox"):
+            print(f"    {name:12s} -> {YELLOW}[SKIP] ABUSECH_API_KEY no configurada{RESET}")
             results[name] = False
+    else:
+        auth_header = {"Auth-Key": ABUSECH_API_KEY}
+        # URLhaus
+        try:
+            r = requests.post(
+                "https://urlhaus-api.abuse.ch/v1/host/",
+                headers=auth_header, data={"host": "8.8.8.8"}, timeout=10
+            )
+            if r.status_code == 200:
+                print(f"    {'urlhaus':12s} -> {GREEN}[OK] Conectado correctamente — HTTP {r.status_code}{RESET}")
+                results["urlhaus"] = True
+            elif r.status_code == 401:
+                print(f"    {'urlhaus':12s} -> {RED}[ERROR] API key invalida — HTTP 401{RESET}")
+                results["urlhaus"] = False
+            else:
+                print(f"    {'urlhaus':12s} -> {RED}[ERROR] Respuesta inesperada — HTTP {r.status_code}{RESET}")
+                results["urlhaus"] = False
+        except Exception as e:
+            print(f"    {'urlhaus':12s} -> {RED}[ERROR] Sin conexion: {e}{RESET}")
+            results["urlhaus"] = False
+        # ThreatFox
+        try:
+            r = requests.post(
+                "https://threatfox-api.abuse.ch/api/v1/",
+                headers=auth_header,
+                json={"query": "search_ioc", "search_term": "8.8.8.8", "exact_match": True},
+                timeout=10
+            )
+            if r.status_code == 200:
+                print(f"    {'threatfox':12s} -> {GREEN}[OK] Conectado correctamente — HTTP {r.status_code}{RESET}")
+                results["threatfox"] = True
+            elif r.status_code == 401:
+                print(f"    {'threatfox':12s} -> {RED}[ERROR] API key invalida — HTTP 401{RESET}")
+                results["threatfox"] = False
+            else:
+                print(f"    {'threatfox':12s} -> {RED}[ERROR] Respuesta inesperada — HTTP {r.status_code}{RESET}")
+                results["threatfox"] = False
+        except Exception as e:
+            print(f"    {'threatfox':12s} -> {RED}[ERROR] Sin conexion: {e}{RESET}")
+            results["threatfox"] = False
 
     print()
     return (results.get("abuseipdb", False), results.get("virustotal", False),
             results.get("greynoise", False), results.get("otx", False),
-            results.get("urlhaus", False), results.get("feodo", False))
+            results.get("urlhaus", False), results.get("threatfox", False))
 
 # ─── ABUSEIPDB ─────────────────────────────────────────────
 def check_abuseipdb(ip, enabled):
@@ -203,7 +239,7 @@ def check_virustotal(ip, enabled):
             api_stats["virustotal"]["ok"] += 1
             attr  = r.json()["data"]["attributes"]
             stats = attr.get("last_analysis_stats", {})
-            ts = attr.get("last_analysis_date")
+            ts    = attr.get("last_analysis_date")
             last_analysis = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "?"
             return {
                 "status":        "ok",
@@ -232,10 +268,7 @@ def check_greynoise(ip, enabled):
         api_stats["greynoise"]["skipped"] += 1
         return None
     try:
-        r = requests.get(
-            f"https://api.greynoise.io/v3/community/{ip}",
-            timeout=10
-        )
+        r = requests.get(f"https://api.greynoise.io/v3/community/{ip}", timeout=10)
         if r.status_code == 200:
             api_stats["greynoise"]["ok"] += 1
             d = r.json()
@@ -249,16 +282,11 @@ def check_greynoise(ip, enabled):
                 "last_seen":      d.get("last_seen", "?"),
             }
         elif r.status_code == 404:
-            # IP no está en la base de datos de GreyNoise
             api_stats["greynoise"]["ok"] += 1
             return {
-                "status":         "ok",
-                "http_code":      r.status_code,
-                "noise":          False,
-                "riot":           False,
-                "classification": "unknown",
-                "name":           "—",
-                "last_seen":      "?",
+                "status": "ok", "http_code": 404,
+                "noise": False, "riot": False,
+                "classification": "unknown", "name": "—", "last_seen": "?",
             }
         else:
             api_stats["greynoise"]["error"] += 1
@@ -280,7 +308,7 @@ def check_otx(ip, enabled):
         )
         if r.status_code == 200:
             api_stats["otx"]["ok"] += 1
-            d = r.json()
+            d          = r.json()
             pulse_info = d.get("pulse_info", {})
             pulses     = pulse_info.get("pulses", [])
             tags = []
@@ -288,11 +316,11 @@ def check_otx(ip, enabled):
                 tags.extend(p.get("tags", []))
             top_tags = list(dict.fromkeys(tags))[:4]
             return {
-                "status":       "ok",
-                "http_code":    r.status_code,
-                "pulse_count":  pulse_info.get("count", 0),
-                "reputation":   d.get("reputation", 0),
-                "top_tags":     top_tags,
+                "status":      "ok",
+                "http_code":   r.status_code,
+                "pulse_count": pulse_info.get("count", 0),
+                "reputation":  d.get("reputation", 0),
+                "top_tags":    top_tags,
             }
         else:
             api_stats["otx"]["error"] += 1
@@ -309,22 +337,23 @@ def check_urlhaus(ip, enabled):
     try:
         r = requests.post(
             "https://urlhaus-api.abuse.ch/v1/host/",
+            headers={"Auth-Key": ABUSECH_API_KEY},
             data={"host": ip},
             timeout=10
         )
         if r.status_code == 200:
             api_stats["urlhaus"]["ok"] += 1
-            d = r.json()
-            found = d.get("query_status") == "is_host"
-            urls  = d.get("urls", [])
+            d      = r.json()
+            found  = d.get("query_status") == "is_host"
+            urls   = d.get("urls", [])
             online = sum(1 for u in urls if u.get("url_status") == "online")
             return {
-                "status":     "ok",
-                "http_code":  r.status_code,
-                "found":      found,
-                "total_urls": len(urls),
+                "status":      "ok",
+                "http_code":   r.status_code,
+                "found":       found,
+                "total_urls":  len(urls),
                 "online_urls": online,
-                "reference":  d.get("urlhaus_reference", ""),
+                "reference":   d.get("urlhaus_reference", ""),
             }
         else:
             api_stats["urlhaus"]["error"] += 1
@@ -333,42 +362,53 @@ def check_urlhaus(ip, enabled):
         api_stats["urlhaus"]["error"] += 1
         return {"status": "error", "http_code": 0, "detail": str(e)}
 
-# ─── FEODO TRACKER (abuse.ch) ──────────────────────────────
-def check_feodo(ip, enabled):
+# ─── THREATFOX (abuse.ch) ──────────────────────────────────
+def check_threatfox(ip, enabled):
     if not enabled:
-        api_stats["feodo"]["skipped"] += 1
+        api_stats["threatfox"]["skipped"] += 1
         return None
     try:
         r = requests.post(
-            "https://feodotracker.abuse.ch/api/v1/host/",
-            data={"host": ip},
+            "https://threatfox-api.abuse.ch/api/v1/",
+            headers={"Auth-Key": ABUSECH_API_KEY},
+            json={"query": "search_ioc", "search_term": ip, "exact_match": True},
             timeout=10
         )
         if r.status_code == 200:
-            api_stats["feodo"]["ok"] += 1
-            d = r.json()
+            api_stats["threatfox"]["ok"] += 1
+            d     = r.json()
             found = d.get("query_status") == "ok"
+            iocs  = d.get("data", []) if found else []
+            malware_list = list(dict.fromkeys(
+                i.get("malware_printable", "?") for i in iocs if i.get("malware_printable")
+            ))[:3]
+            threat_types = list(dict.fromkeys(
+                i.get("threat_type", "?") for i in iocs if i.get("threat_type")
+            ))[:2]
+            confidence = max((i.get("confidence_level", 0) for i in iocs), default=0)
+            first_seen = str(iocs[0].get("first_seen", "?"))[:10] if iocs else None
             return {
-                "status":      "ok",
-                "http_code":   r.status_code,
-                "found":       found,
-                "malware":     d.get("malware", "?") if found else None,
-                "c2_status":   d.get("c2_status", "?") if found else None,
-                "first_seen":  str(d.get("first_seen", "?"))[:10] if found else None,
-                "last_online": str(d.get("last_online", "?"))[:10] if found else None,
+                "status":       "ok",
+                "http_code":    r.status_code,
+                "found":        found,
+                "ioc_count":    len(iocs),
+                "malware":      malware_list,
+                "threat_types": threat_types,
+                "confidence":   confidence,
+                "first_seen":   first_seen,
             }
         else:
-            api_stats["feodo"]["error"] += 1
+            api_stats["threatfox"]["error"] += 1
             return {"status": "error", "http_code": r.status_code, "detail": r.text[:200]}
     except Exception as e:
-        api_stats["feodo"]["error"] += 1
+        api_stats["threatfox"]["error"] += 1
         return {"status": "error", "http_code": 0, "detail": str(e)}
 
 # ─── CLASIFICACION DE RIESGO ──────────────────────────────
-def get_risk_level(abuse_score, vt_malicious, gn_classification, otx_pulses, feodo_found, urlhaus_found):
+def get_risk_level(abuse_score, vt_malicious, gn_classification, otx_pulses, threatfox_found, urlhaus_found):
     if (abuse_score >= 80 or vt_malicious >= 5
             or gn_classification == "malicious"
-            or feodo_found):
+            or threatfox_found):
         return "CRITICO", RED
     elif (abuse_score >= 50 or vt_malicious >= 2
             or otx_pulses >= 5):
@@ -380,15 +420,15 @@ def get_risk_level(abuse_score, vt_malicious, gn_classification, otx_pulses, feo
         return "BAJO",    GREEN
 
 # ─── IMPRIMIR RESULTADO DE UNA IP ─────────────────────────
-def print_ip_result(ip, user, abuse_data, vt_data, gn_data, otx_data, urlhaus_data, feodo_data):
-    abuse_score       = abuse_data.get("abuse_score", 0)       if abuse_data  and abuse_data.get("status")  == "ok" else 0
-    vt_malicious      = vt_data.get("malicious", 0)            if vt_data     and vt_data.get("status")     == "ok" else 0
-    gn_classification = gn_data.get("classification", "unknown") if gn_data   and gn_data.get("status")     == "ok" else "unknown"
-    otx_pulses        = otx_data.get("pulse_count", 0)         if otx_data    and otx_data.get("status")    == "ok" else 0
-    feodo_found       = feodo_data.get("found", False)         if feodo_data  and feodo_data.get("status")  == "ok" else False
-    urlhaus_found     = urlhaus_data.get("found", False)       if urlhaus_data and urlhaus_data.get("status") == "ok" else False
+def print_ip_result(ip, user, abuse_data, vt_data, gn_data, otx_data, urlhaus_data, threatfox_data):
+    abuse_score       = abuse_data.get("abuse_score", 0)          if abuse_data     and abuse_data.get("status")     == "ok" else 0
+    vt_malicious      = vt_data.get("malicious", 0)               if vt_data        and vt_data.get("status")        == "ok" else 0
+    gn_classification = gn_data.get("classification", "unknown")  if gn_data        and gn_data.get("status")        == "ok" else "unknown"
+    otx_pulses        = otx_data.get("pulse_count", 0)            if otx_data       and otx_data.get("status")       == "ok" else 0
+    threatfox_found   = threatfox_data.get("found", False)        if threatfox_data and threatfox_data.get("status") == "ok" else False
+    urlhaus_found     = urlhaus_data.get("found", False)          if urlhaus_data   and urlhaus_data.get("status")   == "ok" else False
 
-    risk, color = get_risk_level(abuse_score, vt_malicious, gn_classification, otx_pulses, feodo_found, urlhaus_found)
+    risk, color = get_risk_level(abuse_score, vt_malicious, gn_classification, otx_pulses, threatfox_found, urlhaus_found)
 
     print(f"{BOLD}[*] {ip:20s}  usuario: {user}{RESET}")
 
@@ -466,8 +506,8 @@ def print_ip_result(ip, user, abuse_data, vt_data, gn_data, otx_data, urlhaus_da
         print(f"    URLhaus    -> {GRAY}[SKIP]{RESET}")
     elif urlhaus_data.get("status") == "ok":
         if urlhaus_found:
-            online = urlhaus_data["online_urls"]
-            total  = urlhaus_data["total_urls"]
+            online     = urlhaus_data["online_urls"]
+            total      = urlhaus_data["total_urls"]
             online_str = f"{RED}{online} activas{RESET}" if online > 0 else f"{GRAY}{online} activas{RESET}"
             print(f"    URLhaus    -> {RED}[ENCONTRADO]{RESET} "
                   f"URLs de malware: {total} total | {online_str}")
@@ -476,20 +516,25 @@ def print_ip_result(ip, user, abuse_data, vt_data, gn_data, otx_data, urlhaus_da
     else:
         print(f"    URLhaus    -> {RED}[HTTP {urlhaus_data['http_code']}] ERROR: {urlhaus_data.get('detail','')[:60]}{RESET}")
 
-    # Feodo Tracker
-    if feodo_data is None:
-        print(f"    Feodo      -> {GRAY}[SKIP]{RESET}")
-    elif feodo_data.get("status") == "ok":
-        if feodo_found:
-            c2_color = RED if feodo_data["c2_status"] == "online" else YELLOW
-            print(f"    Feodo      -> {RED}[C2 DETECTADO]{RESET} "
-                  f"Malware: {RED}{feodo_data['malware']}{RESET} | "
-                  f"Estado: {c2_color}{feodo_data['c2_status']}{RESET} | "
-                  f"Visto: {feodo_data['first_seen']} → {feodo_data['last_online']}")
+    # ThreatFox
+    if threatfox_data is None:
+        print(f"    ThreatFox  -> {GRAY}[SKIP]{RESET}")
+    elif threatfox_data.get("status") == "ok":
+        if threatfox_found:
+            malware_str = ", ".join(threatfox_data["malware"]) or "?"
+            threat_str  = ", ".join(threatfox_data["threat_types"]) or "?"
+            conf        = threatfox_data["confidence"]
+            conf_color  = RED if conf >= 75 else YELLOW
+            print(f"    ThreatFox  -> {RED}[IOC DETECTADO]{RESET} "
+                  f"Malware: {RED}{malware_str}{RESET} | "
+                  f"Tipo: {threat_str} | "
+                  f"Confianza: {conf_color}{conf}%{RESET} | "
+                  f"IOCs: {threatfox_data['ioc_count']} | "
+                  f"Visto: {threatfox_data['first_seen']}")
         else:
-            print(f"    Feodo      -> {GREEN}[HTTP {feodo_data['http_code']}]{RESET} Sin resultados")
+            print(f"    ThreatFox  -> {GREEN}[HTTP {threatfox_data['http_code']}]{RESET} Sin resultados")
     else:
-        print(f"    Feodo      -> {RED}[HTTP {feodo_data['http_code']}] ERROR: {feodo_data.get('detail','')[:60]}{RESET}")
+        print(f"    ThreatFox  -> {RED}[HTTP {threatfox_data['http_code']}] ERROR: {threatfox_data.get('detail','')[:60]}{RESET}")
 
     print(f"    Riesgo     -> {color}{BOLD}{risk}{RESET}\n")
     return risk
@@ -503,7 +548,7 @@ def main():
     print(f"{BOLD}{CYAN}  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{RESET}")
     print(f"{BOLD}{CYAN}{'='*65}{RESET}\n")
 
-    abuseipdb_ok, virustotal_ok, greynoise_ok, otx_ok, urlhaus_ok, feodo_ok = verify_api_keys()
+    abuseipdb_ok, virustotal_ok, greynoise_ok, otx_ok, urlhaus_ok, threatfox_ok = verify_api_keys()
     IPS = load_ips(ip_file)
 
     results      = []
@@ -513,19 +558,19 @@ def main():
         ip   = entry["ip"]
         user = entry["user"]
 
-        abuse_data   = check_abuseipdb(ip, abuseipdb_ok)
-        vt_data      = check_virustotal(ip, virustotal_ok)
-        gn_data      = check_greynoise(ip, greynoise_ok)
-        otx_data     = check_otx(ip, otx_ok)
-        urlhaus_data = check_urlhaus(ip, urlhaus_ok)
-        feodo_data   = check_feodo(ip, feodo_ok)
+        abuse_data     = check_abuseipdb(ip, abuseipdb_ok)
+        vt_data        = check_virustotal(ip, virustotal_ok)
+        gn_data        = check_greynoise(ip, greynoise_ok)
+        otx_data       = check_otx(ip, otx_ok)
+        urlhaus_data   = check_urlhaus(ip, urlhaus_ok)
+        threatfox_data = check_threatfox(ip, threatfox_ok)
 
-        risk = print_ip_result(ip, user, abuse_data, vt_data, gn_data, otx_data, urlhaus_data, feodo_data)
+        risk = print_ip_result(ip, user, abuse_data, vt_data, gn_data, otx_data, urlhaus_data, threatfox_data)
 
         result = {"ip": ip, "user": user, "risk": risk,
                   "abuseipdb": abuse_data, "virustotal": vt_data,
-                  "greynoise": gn_data, "otx": otx_data,
-                  "urlhaus": urlhaus_data, "feodo": feodo_data}
+                  "greynoise": gn_data,    "otx": otx_data,
+                  "urlhaus": urlhaus_data, "threatfox": threatfox_data}
         results.append(result)
         if risk in ("CRITICO", "ALTO"):
             critical_ips.append(result)
@@ -553,13 +598,13 @@ def main():
     if critical_ips:
         print(f"\n{BOLD}{RED}  ACCION REQUERIDA:{RESET}")
         for r in critical_ips:
-            abuse = r["abuseipdb"] or {}
-            vt    = r["virustotal"] or {}
-            feodo = r["feodo"] or {}
-            feodo_str = f"  {RED}[C2: {feodo.get('malware','?')}]{RESET}" if feodo.get("found") else ""
+            abuse    = r["abuseipdb"]  or {}
+            vt       = r["virustotal"] or {}
+            threatfox = r["threatfox"] or {}
+            tf_str   = f"  {RED}[IOC: {', '.join(threatfox.get('malware', []))}]{RESET}" if threatfox.get("found") else ""
             print(f"    {RED}-> {r['ip']:20s}  usuario: {r['user']:<20s}  "
                   f"AbuseScore: {abuse.get('abuse_score','N/A')}%  "
-                  f"VT malicious: {vt.get('malicious','N/A')}{RESET}{feodo_str}")
+                  f"VT malicious: {vt.get('malicious','N/A')}{RESET}{tf_str}")
 
     with open(OUTPUT_FILE, "w") as f:
         json.dump({"generated_at": datetime.now().isoformat(),
