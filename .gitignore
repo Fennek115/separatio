@@ -1,0 +1,18 @@
+# API keys - NUNCA subir
+.env
+
+# Reportes generados
+threat_report_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Windows / WSL
+*.Zone.Identifier
+*:Zone.Identifier
+Thumbs.db

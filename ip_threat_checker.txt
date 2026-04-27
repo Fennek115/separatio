@@ -1,0 +1,20 @@
+# Formato: IP,usuario
+# El usuario es opcional — si no lo pones, aparece como "desconocido"
+# Las líneas que empiezan con # son comentarios y se ignoran
+
+# === CASO ejemplo — brute force SSH ===
+192.0.2.10,usuario.01
+192.0.2.11,usuario.02
+192.0.2.12,usuario.03
+192.0.2.13,usuario.04
+192.0.2.14,usuario.05
+198.51.100.20,usuario.06
+198.51.100.21,usuario.07
+198.51.100.22,usuario.08
+198.51.100.23,usuario.09
+198.51.100.24,usuario.10
+203.0.113.30,usuario.11
+203.0.113.31,usuario.12
+203.0.113.32
+203.0.113.33
+203.0.113.34
