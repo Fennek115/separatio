@@ -16,6 +16,8 @@ import logging
 import re
 import requests
 from collections import defaultdict
+
+from net import get_with_retry
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -61,11 +63,16 @@ class CorrelationContext:
     epss_fetch_ok: bool = False
     total_articles: int = 0
 
+    # Bloques de texto extra inyectados por etapas posteriores (p.ej. Stage 2.7
+    # enrichment externo). Se anexan al final de format_for_prompt() sin que
+    # el correlator deba conocer su origen — mantiene desacople.
+    extra_blocks: list[str] = field(default_factory=list)
+
     def has_signals(self) -> bool:
         return bool(
             self.corroborated_cves or self.kev_active_cves
             or self.poc_available_cves or self.trending_actors
-            or self.corroborated_iocs
+            or self.corroborated_iocs or self.extra_blocks
         )
 
     def format_for_prompt(self) -> str:
@@ -117,6 +124,9 @@ class CorrelationContext:
             "REGLA: Usa estas correlaciones como hechos verificados en el informe.",
             "NO inferir ni especular conexiones adicionales no listadas aquí.",
         ]
+        for block in self.extra_blocks:
+            if block:
+                lines += ["", block]
         return "\n".join(lines)
 
 
@@ -220,7 +230,7 @@ def build_correlation_context(
     # ── CISA KEV lookup ──────────────────────────────────
     logger.info("  Consultando CISA KEV...")
     try:
-        resp = requests.get(kev_url, timeout=kev_timeout)
+        resp = get_with_retry(kev_url, timeout=kev_timeout)
         resp.raise_for_status()
         kev_ids = {
             v["cveID"].upper()
@@ -246,7 +256,7 @@ def build_correlation_context(
             for i in range(0, len(all_cves), chunk_size):
                 chunk = all_cves[i : i + chunk_size]
                 params = {"cve": ",".join(chunk), "scope": "time-series"}
-                r = requests.get(
+                r = get_with_retry(
                     epss_url,
                     params={"cve": ",".join(chunk)},
                     timeout=kev_timeout,

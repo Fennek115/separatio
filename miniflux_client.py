@@ -7,6 +7,8 @@ import requests
 import logging
 from dataclasses import dataclass
 
+from net import request_with_retry
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,13 +49,15 @@ class MinifluxClient:
 
     def _get(self, endpoint: str, params: dict = None) -> dict:
         url = f"{self.base_url}/v1/{endpoint}"
-        resp = self.session.get(url, params=params, timeout=10)
+        resp = request_with_retry("GET", url, session=self.session,
+                                  params=params, timeout=10)
         resp.raise_for_status()
         return resp.json()
 
     def _put(self, endpoint: str, payload: dict) -> None:
         url = f"{self.base_url}/v1/{endpoint}"
-        resp = self.session.put(url, json=payload, timeout=10)
+        resp = request_with_retry("PUT", url, session=self.session,
+                                  json=payload, timeout=10)
         resp.raise_for_status()
 
     def get_unread_articles(self, limit: int = 200,

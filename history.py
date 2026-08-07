@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -98,9 +99,17 @@ def load_history(history_path: str) -> dict:
 
 
 def save_history(history: dict, history_path: str) -> None:
-    Path(history_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(history_path, "w", encoding="utf-8") as f:
+    """Escritura atómica: serializa a un archivo temporal en el mismo directorio
+    y luego os.replace() — operación atómica en POSIX. Evita que un crash o un
+    run concurrente dejen history.json truncado/corrupto."""
+    p = Path(history_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
 
 
 def append_daily_record(

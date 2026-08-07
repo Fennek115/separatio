@@ -412,6 +412,7 @@ def stage2_summarize(articles: list[dict], dry_run: bool = False) -> list[Articl
     logger.info("═" * 50)
 
     summaries: list[ArticleSummary] = []
+    failures = 0          # futures que lanzaron excepción o resúmenes con .error
     start = time.time()
 
     with ThreadPoolExecutor(max_workers=config.PARALLEL_WORKERS) as executor:
@@ -426,6 +427,8 @@ def stage2_summarize(articles: list[dict], dry_run: bool = False) -> list[Articl
             try:
                 summary = future.result()
                 summaries.append(summary)
+                if summary.error:
+                    failures += 1
                 elapsed = time.time() - start
                 rate    = done / elapsed * 60
                 logger.info(
@@ -434,6 +437,7 @@ def stage2_summarize(articles: list[dict], dry_run: bool = False) -> list[Articl
                     f"  (~{rate:.0f} art/min)"
                 )
             except Exception as e:
+                failures += 1
                 logger.error(f"Error en resumen de '{item['title'][:50]}': {e}")
 
     total_time = time.time() - start
@@ -443,8 +447,19 @@ def stage2_summarize(articles: list[dict], dry_run: bool = False) -> list[Articl
 
     logger.info(
         f"Etapa 2 completada en {total_time / 60:.1f} min "
-        f"({len(summaries)} resúmenes) — {by_severity}"
+        f"({len(summaries)} resúmenes, {failures} fallos) — {by_severity}"
     )
+
+    # Fail-fast: si demasiados artículos fallaron, casi siempre indica un fallo
+    # sistémico (LLM/provider caído, key inválida). Abortar aquí evita gastar
+    # horas en Stage 3 para producir un informe vacío o sin sentido.
+    threshold = getattr(config, "STAGE2_FAIL_FAST_THRESHOLD", 0.5)
+    if not dry_run and articles and failures / len(articles) >= threshold:
+        raise RuntimeError(
+            f"Stage 2 abortado: {failures}/{len(articles)} resúmenes fallaron "
+            f"(≥{threshold:.0%}). Probable fallo del proveedor LLM o credenciales. "
+            f"Revisa la conexión a {config.PROVIDER} antes de reintentar."
+        )
     return summaries
 
 
@@ -462,6 +477,44 @@ def stage25_correlate(summaries: list[ArticleSummary]) -> CorrelationContext:
         epss_url=config.EPSS_API_URL,
         kev_timeout=config.KEV_FETCH_TIMEOUT,
     )
+
+
+# ─────────────────────────────────────────────
+# ETAPA 2.7: ENRICHMENT EXTERNO DE IOCs
+# ─────────────────────────────────────────────
+
+def stage27_enrich(
+    summaries: list[ArticleSummary],
+    correlation: CorrelationContext,
+):
+    """Cruza los IOCs del día contra fuentes externas (IPsum, OpenPhish, ipcheck…)
+    y anexa los veredictos al CorrelationContext para que lleguen al prompt de
+    Stage 3. Toda la etapa es tolerante a fallos: nunca aborta el run."""
+    if not getattr(config, "ENRICHMENT_ENABLED", False):
+        return None
+    logger.info("═" * 50)
+    logger.info("ETAPA 2.7: Enrichment externo de IOCs")
+    logger.info("═" * 50)
+    try:
+        from enrichers import build_enrichers
+        from enrichment import run_enrichment
+
+        enrichers = build_enrichers(config)
+        if not enrichers:
+            logger.info("  Enrichment: sin fuentes habilitadas")
+            return None
+        ctx = run_enrichment(summaries, enrichers)
+        block = ctx.format_for_prompt()
+        if block:
+            correlation.extra_blocks.append(block)
+        logger.info(
+            f"  Enrichment: {len(ctx.verdicts)} veredictos | "
+            f"ok={ctx.sources_ok} | fallidas={ctx.sources_failed}"
+        )
+        return ctx
+    except Exception as e:
+        logger.warning(f"  Enrichment falló (no crítico, se continúa): {e}")
+        return None
 
 
 # ─────────────────────────────────────────────
@@ -721,6 +774,7 @@ def main():
         summaries   = load_summaries_cache(date_str)
         ioc_paths   = export_iocs(summaries, date_str, _dated_dir(date_str))
         correlation = stage25_correlate(summaries)
+        stage27_enrich(summaries, correlation)
         if getattr(config, "PHASE_REPORTS", False):
             phase_outputs = stage3_phases(summaries, date_str, correlation, dry_run=args.dry_run)
             paths         = stage4_synthesis(phase_outputs, summaries, date_str, dry_run=args.dry_run)
@@ -759,6 +813,7 @@ def main():
         unload_model(config.SUMMARY_MODEL, config.OLLAMA_HOST)
 
     correlation = stage25_correlate(summaries)
+    stage27_enrich(summaries, correlation)
     trending    = stage26_history(summaries, date_str, correlation)
 
     if getattr(config, "PHASE_REPORTS", False):

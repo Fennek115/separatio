@@ -22,3 +22,9 @@ output-threatintel/
 # Editor
 .vscode/
 .idea/
+
+# Secrets (el .env real vive en ~/Projects/Intel/.env, fuera del repo)
+.env
+
+# Claude Code local
+.claude/settings.local.json

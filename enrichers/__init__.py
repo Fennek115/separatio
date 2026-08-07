@@ -1,0 +1,47 @@
+"""
+enrichers — plugins concretos de la capa de enrichment (Stage 2.7).
+
+`build_enrichers(config)` lee los toggles de config y devuelve la lista de
+enrichers habilitados. Agregar una fuente nueva = crear un módulo con una
+subclase de Enricher y registrarla aquí; no se toca el pipeline.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from enrichment import Enricher
+
+logger = logging.getLogger(__name__)
+
+
+def build_enrichers(config) -> list[Enricher]:
+    """Instancia los enrichers habilitados en config.ENRICHERS."""
+    toggles: dict = getattr(config, "ENRICHERS", {})
+    enrichers: list[Enricher] = []
+
+    if toggles.get("ipsum"):
+        from enrichers.ipsum import IpsumEnricher
+        enrichers.append(IpsumEnricher(
+            url=getattr(config, "IPSUM_URL",
+                        "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"),
+            min_score=getattr(config, "IPSUM_MIN_SCORE", 3),
+            timeout=getattr(config, "KEV_FETCH_TIMEOUT", 15),
+        ))
+
+    if toggles.get("openphish"):
+        from enrichers.openphish import OpenPhishEnricher
+        enrichers.append(OpenPhishEnricher(
+            url=getattr(config, "OPENPHISH_URL", "https://openphish.com/feed.txt"),
+            timeout=getattr(config, "KEV_FETCH_TIMEOUT", 15),
+        ))
+
+    if toggles.get("ip_reputation"):
+        from enrichers.ip_reputation import IpReputationEnricher
+        enrichers.append(IpReputationEnricher(
+            ipcheck_dir=getattr(config, "IPCHECK_DIR", ""),
+            max_ips=getattr(config, "ENRICH_MAX_IPS", 25),
+            sleep_on_vt=getattr(config, "ENRICH_VT_SLEEP", 15),
+        ))
+
+    return enrichers

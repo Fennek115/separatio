@@ -17,6 +17,7 @@ Runs fully local with Ollama by default. Optionally routes Stage 2 and Stage 3 t
 | **IOC export (CSV + JSON)** | Every run writes `iocs-YYYY-MM-DD.csv` and `.json` — ready for SIEM ingestion or threat hunting |
 | **CISA KEV + EPSS enrichment** | Flags CVEs with confirmed active exploitation and exploitation-probability scores from FIRST.org |
 | **Cross-source correlation** | Deterministic CVE, IOC, and actor corroboration (≥2 independent sources) — no LLM inference |
+| **IOC enrichment (Stage 2.7)** | Pluggable enrichers cross-reference the day's IOCs against external reputation: IPsum (malicious IPs, no key), OpenPhish (phishing, no key), and full IP enrichment via the `ipcheck` library (AbuseIPDB/VirusTotal/GreyNoise/OTX/URLhaus/ThreatFox/Shodan). Fault-tolerant; see `IMPROVEMENTS.md` |
 | **PDF deliverable** | Paginated report with table of contents, report ID (`TIR-YYYYMMDD-XXXX`), and SHA-256 integrity hash |
 | **Historical trending** | 14-day window for recurring actors, CVE re-appearances, and threat-type shifts |
 | **Provider-agnostic** | Ollama (local/private), OpenAI, Anthropic, or Gemini — swap with one config line |

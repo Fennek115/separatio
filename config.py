@@ -10,6 +10,13 @@ Infraestructura:
 """
 
 import os
+from pathlib import Path
+
+# Raíz del proyecto: el directorio que contiene este config.py.
+# Las rutas de salida se anclan aquí para que el pipeline funcione igual sea
+# cual sea el cwd (p.ej. ejecutado desde cron en otro directorio) — antes las
+# rutas relativas dispersaban los reports y reseteaban history.json.
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 # ─────────────────────────────────────────────
 # LLM PROVIDER
@@ -113,7 +120,7 @@ PER_FEED_LIMIT = 10
 # ─────────────────────────────────────────────
 # OUTPUT
 # ─────────────────────────────────────────────
-OUTPUT_DIR = "./reports"
+OUTPUT_DIR = str(PROJECT_ROOT / "reports")
 
 # Formato de salida: "markdown" | "html" | "both" (md+html) | "pdf" | "all" (md+html+pdf)
 OUTPUT_FORMAT = "both"
@@ -135,6 +142,11 @@ REPORT_TIMEOUT  = 2400
 
 MAX_RETRIES    = 2     # reintentos si falla la extracción de contenido
 
+# Fail-fast de Stage 2: si esta fracción (o más) de los artículos falla al
+# resumirse, el pipeline aborta en vez de generar un informe vacío en Stage 3.
+# Protege contra fallos sistémicos (proveedor LLM caído, API key inválida).
+STAGE2_FAIL_FAST_THRESHOLD = 0.5
+
 # ─────────────────────────────────────────────
 # CORRELATOR (Stage 2.5)
 # ─────────────────────────────────────────────
@@ -153,11 +165,39 @@ EPSS_API_URL      = "https://api.first.org/data/v1/epss"
 KEV_FETCH_TIMEOUT = 15   # segundos (aplica también al fetch de EPSS)
 
 # ─────────────────────────────────────────────
+# ENRICHMENT EXTERNO DE IOCs (Stage 2.7)
+# ─────────────────────────────────────────────
+# Capa de plugins que cruza los IOCs extraídos (IPs, dominios, URLs) contra
+# fuentes externas de reputación. La etapa está envuelta en try/except en el
+# pipeline: cualquier fallo se registra pero NO rompe el run.
+ENRICHMENT_ENABLED = True
+
+# Toggle por enricher.
+#   ipsum / openphish → feeds planos sin API key (rápidos, deterministas)
+#   ip_reputation     → consulta APIs vía la librería ipcheck (requiere keys
+#                       en el entorno y respeta el rate-limit de VirusTotal:
+#                       ~15s por IP que llega a Nivel 3 → lento). Off por defecto.
+ENRICHERS = {
+    "ipsum":         True,
+    "openphish":     True,
+    "ip_reputation": False,
+}
+
+IPSUM_URL       = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
+IPSUM_MIN_SCORE = 3      # nº mínimo de listas públicas que reportan la IP
+OPENPHISH_URL   = "https://openphish.com/feed.txt"
+
+# ip_reputation (librería ipcheck):
+IPCHECK_DIR     = "/home/dust115/projects/tools/ipcheck"  # ruta al repo ipcheck
+ENRICH_MAX_IPS  = 25     # tope de IPs consultadas por API (protege cuota)
+ENRICH_VT_SLEEP = 15     # segundos entre IPs que alcanzan Nivel 3 (rate-limit VT)
+
+# ─────────────────────────────────────────────
 # HISTÓRICO Y TRENDING (Stage 2.6)
 # ─────────────────────────────────────────────
 # Archivo JSON con registro compacto por día (~200 bytes/día, ~73KB/año).
 # El LLM solo recibe un bloque compacto de los últimos TREND_WINDOW_DAYS días.
-HISTORY_FILE      = "./reports/history.json"
+HISTORY_FILE      = str(PROJECT_ROOT / "reports" / "history.json")
 TREND_WINDOW_DAYS = 14   # días de ventana para calcular tendencias
 
 # ─────────────────────────────────────────────
