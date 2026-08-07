@@ -38,12 +38,12 @@ GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
 # ─────────────────────────────────────────────
 # MINIFLUX
 # ─────────────────────────────────────────────
-MINIFLUX_URL      = "http://localhost:8080"   # Si pipeline corre en LXC 112
-#MINIFLUX_URL     = "http://<IP_LXC_112>:8080"  # Si corre en otro lugar
-MINIFLUX_USERNAME = "threat_user"
-MINIFLUX_PASSWORD = "changeme"
-# Recomendado: usar API token en vez de user/pass
-# MINIFLUX_API_TOKEN = "tu-api-token"  # Settings → API Keys en Miniflux UI
+MINIFLUX_URL      = "http://192.168.1.7:8080"   # CT 112 (miniflux) — desde el laptop o cualquier CT
+MINIFLUX_USERNAME = None
+MINIFLUX_PASSWORD = None
+# Auth por API token (Settings → API Keys en Miniflux). Vive en ~/Projects/Intel/.env;
+# pipeline.py lo carga con load_dotenv() antes de importar este módulo.
+MINIFLUX_API_TOKEN = os.getenv("MINIFLUX_API_TOKEN", "")
 
 # Máximo de artículos a procesar por ejecución
 MAX_ARTICLES = 120

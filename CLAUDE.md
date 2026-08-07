@@ -4,7 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-Automated pipeline that reads cybersecurity RSS feeds from Miniflux, summarizes each article with a local LLM (Ollama) or cloud provider (Claude, OpenAI, Gemini), and generates a daily Threat Intelligence report in Markdown, HTML, and/or PDF.
+Automated pipeline that reads cybersecurity RSS feeds from Miniflux, summarizes each article with a cloud LLM provider (Claude — also supports OpenAI, Gemini, or legacy local Ollama), and generates a daily Threat Intelligence report in Markdown, HTML, and/or PDF.
+
+## Estado actual (2026-08-07) — leer antes de tocar nada
+
+Este repo es la pieza central de la fase **F0** del proyecto documentado en
+`~/Projects/Motherbase/` (leer `ESTADO.md` y `fases/F0-separatio.md` de allá para el plan completo).
+Regla de ese proyecto que aplica acá: **verificar contra la máquina, no contra el documento.**
+
+Hecho:
+- Trabajo de junio (Stage 2.7, `net.py`, tests) commiteado y en `origin/main`.
+- `PROVIDER = "claude"` con modelos vigentes (`claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5-20251001`). Ollama quedó como legacy: **el CT 111 ya no existe**.
+- Los 3 enrichers encendidos; `IPCHECK_DIR` apunta a `~/Projects/Intel/ipcheck`.
+- Secretos en `~/Projects/Intel/.env` (fuera del repo); `pipeline.py` lo carga con `load_dotenv()` antes de `import config`. Scripts sueltos (`setup_check.py`, tests manuales) NO lo cargan solos.
+- Miniflux (CT 112, `192.168.1.7:8080`): auth por API token (`MINIFLUX_API_TOKEN` en el `.env`). Categorías ya alineadas con `PHASE_CATEGORY_MAP`: `Cibersecurity`, `Hacking & Research`, `Threat Intel`, `Vulnerability`, `LATAM`.
+- Venv en `./venv/` con `requirements.txt` + `requirements-dev.txt` + `anthropic`. Los 14 tests pasan.
+
+Pendiente (en orden):
+1. **`ANTHROPIC_API_KEY` en `~/Projects/Intel/.env`** — sin eso el pipeline no corre. La pone el usuario.
+2. La categoría `LATAM` de Miniflux existe pero **no tiene feeds** — hasta que el usuario le asigne, esa sección del informe sale vacía.
+3. `VIRUSTOTAL_API_KEY` no está en el `.env` → VT queda fuera del enricher `ip_reputation` (aceptado). GreyNoise: sin clave (no acepta correos Proton).
+4. Paso 6 de F0: `setup_check.py` → `--dry-run` → `--limit 5` → corrida completa.
+5. **Dónde corre y automatización: decisión diferida.** El usuario quiere primero repensar la arquitectura (unificar los repos de `~/Projects/Intel/` y separar por módulos) antes de decidir cron/timer y ubicación. No crear CTs ni crons sin esa decisión.
+6. Criterio de cierre de F0: dos semanas de informes diarios sin intervención.
 
 ## Commands
 
@@ -17,32 +39,27 @@ python pipeline.py --no-mark-read     # skip marking articles as read in Miniflu
 python setup_check.py                 # environment diagnostics
 ```
 
-Install deps: `pip install -r requirements.txt`
+Install deps: `./venv/bin/pip install -r requirements.txt -r requirements-dev.txt anthropic` (venv already exists in `./venv/`).
 
-## Infrastructure (Proxmox)
+## Infrastructure (Proxmox host `motherbase`, 192.168.1.200)
 
-- **LXC 111 — ollama**: 4 cores, 10 GB RAM (CPU-only) — Ollama server
-- **LXC 112 — miniflux**: Miniflux RSS reader on port 8080
-
-Ollama systemd override required on LXC 111:
-```
-Environment="OLLAMA_HOST=0.0.0.0:11434"
-Environment="OLLAMA_KEEP_ALIVE=10m"
-Environment="OLLAMA_MAX_LOADED_MODELS=1"
-```
+- **LXC 112 — miniflux**: Miniflux 2.3.1 on `192.168.1.7:8080`. Pipeline auths with `MINIFLUX_API_TOKEN` (in `~/Projects/Intel/.env`); feeds live under the `admin` user.
+- **LXC 111 — ollama: no longer exists.** Removed after the local-LLM path was discarded (~3.5 h/run on CPU). Any doc mentioning it describes the past.
 
 ## Models
 
-| Stage | Model (Ollama default) | RAM | Thinking |
-|-------|------------------------|-----|----------|
-| Stage 2: per-article JSON extraction | `qwen3.5:4b` | ~3.2 GB | `think=False` |
-| Stage 3–4: phase reports + synthesis | `qwen3.5:9b` | ~7.2 GB | `think=False` |
+Current (cloud, `PROVIDER = "claude"`):
 
-**Sequential swap**: `unload_model()` in `analyzer.py` makes an explicit `keep_alive=0` call after Stage 2 completes to force eviction of the 4b model before Stage 3 loads the 9b.
+| Stage | Model |
+|-------|-------|
+| Stage 2: per-article JSON extraction | `claude-haiku-4-5-20251001` |
+| Phases vulnerability / threat_intel | `claude-sonnet-5` |
+| Phases latam / general | `claude-haiku-4-5-20251001` |
+| Stage 4 synthesis | `claude-opus-5` |
 
-**`PARALLEL_WORKERS=1`**: CPU-only Ollama serializes requests to the same model. With 2 workers, the second request queues behind the first and its httpx timeout fires before Ollama starts processing it. Only raise this if running with GPU or a truly concurrent Ollama setup.
+**Multi-provider**: `PROVIDER` in `config.py` selects `"ollama"` | `"claude"` | `"openai"` | `"gemini"`. API keys read from env vars `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (loaded from `~/Projects/Intel/.env` by `pipeline.py`).
 
-**Multi-provider**: `PROVIDER` in `config.py` selects `"ollama"` | `"claude"` | `"openai"` | `"gemini"`. Cloud providers can use per-phase model routing (e.g. Sonnet for vulnerability, Haiku for general). API keys read from env vars `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`.
+Legacy Ollama notes (only relevant if `PROVIDER = "ollama"` returns): sequential swap via `unload_model()` (`keep_alive=0` after Stage 2); `PARALLEL_WORKERS` must drop back to 1 because CPU-only Ollama serializes requests and the second worker's httpx timeout fires while queued.
 
 ## Pipeline architecture
 
@@ -168,12 +185,8 @@ Miniflux API (unread articles, ordered by published_at desc)
 
 ## Configuration (`config.py`)
 
-Before first use, set:
-- `PROVIDER` — `"ollama"` (default) or cloud provider
-- `OLLAMA_HOST` — IP of LXC 111 (if using Ollama)
-- `MINIFLUX_URL` — IP/port of LXC 112 (or `localhost:8080` if running on LXC 112)
-- `MINIFLUX_PASSWORD` or `MINIFLUX_API_TOKEN`
-- API key env var if using a cloud provider
+Already set (2026-08-07): `PROVIDER = "claude"`, `MINIFLUX_URL = "http://192.168.1.7:8080"`,
+`MINIFLUX_API_TOKEN` from env. Only missing: `ANTHROPIC_API_KEY` in `~/Projects/Intel/.env`.
 
 Key tunable values:
 
@@ -181,7 +194,7 @@ Key tunable values:
 |----------|---------|-------|
 | `MAX_ARTICLES` | 120 | Hard cap per run |
 | `PER_FEED_LIMIT` | 10 | Max articles per feed (prevents monopolization) |
-| `PARALLEL_WORKERS` | 1 | Keep at 1 for CPU-only |
+| `PARALLEL_WORKERS` | 8 | Cloud providers; drop to 1 for CPU-only Ollama |
 | `SUMMARY_TIMEOUT` | 240 | Seconds; per-article Stage 2 |
 | `REPORT_TIMEOUT` | 2400 | Seconds between stream chunks Stage 3–4 |
 | `REPORT_THINKING` | False | Set to True only when testing with thinking-capable models |
@@ -198,19 +211,14 @@ Key tunable values:
 | `NO_SCRAPE_DOMAINS` | vulners, sploitus, wiz.io | Domains that block scrapers — use RSS content only |
 | `STAGE2_FAIL_FAST_THRESHOLD` | 0.5 | Abort if ≥ this fraction of summaries fail |
 | `ENRICHMENT_ENABLED` | True | Master switch for Stage 2.7 |
-| `ENRICHERS` | ipsum/openphish on, ip_reputation off | Per-enricher toggles |
+| `ENRICHERS` | all three on | Per-enricher toggles (VT skipped: no `VIRUSTOTAL_API_KEY`) |
 | `IPSUM_MIN_SCORE` | 3 | Min public blocklists reporting an IP to flag it |
 | `IPCHECK_DIR` | path to ipcheck repo | For the `ip_reputation` enricher |
 | `ENRICH_MAX_IPS` / `ENRICH_VT_SLEEP` | 25 / 15 | API-IP cap / VT pacing (Level-3 IPs) |
 
-## Cron (LXC 112)
+## Scheduling — not decided yet
 
-```cron
-0 3 * * * root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py >> /var/log/threat-pipeline.log 2>&1
-```
-
-Timing on i7-10510U (CPU-only):
-- Stage 2: ~1.75 min/article → 120 articles ≈ 3.5 hours
-- Stage 2.5–2.6: <30 seconds (HTTP fetch KEV/EPSS + local computation)
-- Stage 3–4: `think=False` → ~15–20 min for any article volume
-- Total: ~3.75 hours → cron at 03:00 leaves report ready ~06:45, before 08:00
+There is **no cron/timer anywhere** today, on purpose: where the pipeline runs (new CT vs.
+systemd timer on the laptop `thinkfox`) is deferred until the user re-architects
+`~/Projects/Intel/` (unify repos, split by modules). Do not create CTs or crons before that
+decision. With a cloud provider a full run is ~5 min, so scheduling is cheap once decided.

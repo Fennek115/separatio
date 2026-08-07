@@ -7,7 +7,7 @@
 
 Applied to cybersecurity intelligence: the daily flood of security publications contains both gold and dross. This pipeline performs the separation automatically — ingesting curated sources, discarding what is redundant or low-signal, and distilling what remains into a structured daily briefing.
 
-Runs fully local with Ollama by default. Optionally routes Stage 2 and Stage 3 to Claude, OpenAI, or Gemini APIs — a single config change, no code modifications required.
+Runs against a cloud provider (Claude, OpenAI, or Gemini) or fully local with Ollama — a single config change, no code modifications required.
 
 **Key features at a glance:**
 
@@ -261,9 +261,9 @@ python pipeline.py --limit 3          # full run with 3 articles
 
 ---
 
-## Proxmox / LXC setup (Ollama)
+## Proxmox / LXC setup (Ollama) — legacy reference
 
-This is the reference hardware setup using three dedicated LXC containers on Proxmox. Skip this section if you are using a cloud provider.
+This documents a reference setup using three dedicated LXC containers on Proxmox. It is **not the current deployment** (the Ollama container was retired in favor of a cloud provider — a full CPU-only run took ~3.5 h). Kept as a recipe in case a local-only setup is needed again. Skip this section if you are using a cloud provider.
 
 ### Infrastructure
 
