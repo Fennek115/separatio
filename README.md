@@ -215,17 +215,17 @@ MINIFLUX_API_TOKEN = "your-api-token"
 PROVIDER           = "claude"
 ANTHROPIC_API_KEY  = "sk-ant-..."  # or: export ANTHROPIC_API_KEY=sk-ant-...
 SUMMARY_MODEL      = "claude-haiku-4-5-20251001"
-REPORT_MODEL       = "claude-sonnet-4-6"
+REPORT_MODEL       = "claude-sonnet-5"
 ARTICLE_MAX_TOKENS = 2500
 PARALLEL_WORKERS   = 8
 PHASE_REPORTS      = True
 
 PHASE_MODELS = {
-    "vulnerability": "claude-sonnet-4-6",
-    "threat_intel":  "claude-sonnet-4-6",
+    "vulnerability": "claude-sonnet-5",
+    "threat_intel":  "claude-sonnet-5",
     "latam":         "claude-haiku-4-5-20251001",
     "general":       "claude-haiku-4-5-20251001",
-    "synthesis":     "claude-sonnet-4-6",
+    "synthesis":     "claude-sonnet-5",
 }
 
 MINIFLUX_URL       = "http://localhost:8080"
@@ -391,18 +391,18 @@ pip install anthropic
 PROVIDER           = "claude"
 ANTHROPIC_API_KEY  = "sk-ant-..."   # or: export ANTHROPIC_API_KEY=sk-ant-...
 SUMMARY_MODEL      = "claude-haiku-4-5-20251001"
-REPORT_MODEL       = "claude-sonnet-4-6"
+REPORT_MODEL       = "claude-sonnet-5"
 ARTICLE_MAX_TOKENS = 2500
 REPORT_MAX_TOKENS  = 10000
 PARALLEL_WORKERS   = 8
 PHASE_REPORTS      = True
 
 PHASE_MODELS = {
-    "vulnerability": "claude-sonnet-4-6",
-    "threat_intel":  "claude-sonnet-4-6",
+    "vulnerability": "claude-sonnet-5",
+    "threat_intel":  "claude-sonnet-5",
     "latam":         "claude-haiku-4-5-20251001",   # cheaper — shorter output
     "general":       "claude-haiku-4-5-20251001",
-    "synthesis":     "claude-opus-4-7",              # deeper cross-domain reasoning
+    "synthesis":     "claude-opus-5",              # deeper cross-domain reasoning
 }
 ```
 
@@ -467,11 +467,11 @@ Phases, category routing, and auto-scaling are described in the [Pipeline](#pipe
 | Phase | OpenAI | Claude | Gemini | Notes |
 |-------|--------|--------|--------|-------|
 | Stage 2 — extraction | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.0-flash` | High-volume JSON; fast and cheap |
-| Vulnerability | `gpt-4.1` | `claude-sonnet-4-6` | `gemini-2.5-pro` | Technical precision for CVE analysis |
-| Threat Intel | `gpt-4.1` | `claude-sonnet-4-6` | `gemini-2.5-pro` | Narrative synthesis, actor attribution |
+| Vulnerability | `gpt-4.1` | `claude-sonnet-5` | `gemini-2.5-pro` | Technical precision for CVE analysis |
+| Threat Intel | `gpt-4.1` | `claude-sonnet-5` | `gemini-2.5-pro` | Narrative synthesis, actor attribution |
 | LATAM | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.0-flash` | Regional context; lighter model sufficient |
 | General | `gpt-4.1-mini` | `claude-haiku-4-5-20251001` | `gemini-2.0-flash` | News summary; shorter output |
-| Stage 4 — synthesis | `gpt-4.1` | `claude-opus-4-7` | `gemini-2.5-pro` | Cross-domain reasoning benefits from the strongest model |
+| Stage 4 — synthesis | `gpt-4.1` | `claude-opus-5` | `gemini-2.5-pro` | Cross-domain reasoning benefits from the strongest model |
 
 Set these in `PHASE_MODELS` inside `config.py` (comments in the file show the exact values to copy).
 

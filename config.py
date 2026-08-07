@@ -22,11 +22,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # LLM PROVIDER
 # ─────────────────────────────────────────────
 # Opciones: "ollama" | "claude" | "openai" | "gemini"
-PROVIDER = "ollama"
+PROVIDER = "claude"
 
 # Nombres de modelo según el proveedor elegido:
 #   ollama  → "qwen3.5:4b" / "qwen3.5:9b"
-#   claude  → "claude-haiku-4-5-20251001" / "claude-sonnet-4-6"
+#   claude  → "claude-haiku-4-5-20251001" / "claude-sonnet-5"
 #   openai  → "gpt-4.1-mini" / "gpt-4.1"         ← recomendado: 200K TPM, 1M ctx; gpt-4o tiene 30K TPM (insuficiente con 120 arts)
 #   gemini  → "gemini-2.0-flash" / "gemini-2.5-pro"
 
@@ -65,10 +65,10 @@ MARK_AS_READ = True
 OLLAMA_HOST = "http://<IP_LXC_111>:11434"  # ← Cambiar por IP real del LXC 111
 
 # Etapa 2: extracción JSON por artículo (modelo rápido, thinking=false)
-SUMMARY_MODEL = "qwen3.5:4b"
+SUMMARY_MODEL = "claude-haiku-4-5-20251001"
 
 # Etapa 3: informe consolidado (modelo de calidad, thinking=true)
-REPORT_MODEL  = "qwen3.5:9b"
+REPORT_MODEL  = "claude-sonnet-5"
 
 # Qwen3.5 soporta toggle de thinking. True = el modelo razona antes de responder.
 # Etapa 2 → False (queremos JSON directo, sin overhead de razonamiento)
@@ -77,10 +77,10 @@ SUMMARY_THINKING = False
 REPORT_THINKING  = False
 
 # Workers paralelos para Etapa 2.
-# Con CPU-only Ollama serializa las requests al mismo modelo aunque lleguen en paralelo.
-# PARALLEL_WORKERS=1 evita que el segundo worker agote su timeout esperando en cola.
-# Subir a 2 solo si el LXC puede procesar requests en paralelo (GPU o Ollama concurrente).
-PARALLEL_WORKERS = 1
+# Cloud providers procesan en paralelo sin problema → 8.
+# Con CPU-only Ollama serializa las requests al mismo modelo aunque lleguen en paralelo:
+# ahí PARALLEL_WORKERS=1 evita que el segundo worker agote su timeout esperando en cola.
+PARALLEL_WORKERS = 8
 
 # Contexto por etapa (optimiza uso de RAM del KV cache)
 # Etapa 2: artículos de entrada son cortos, 2K tokens es suficiente
@@ -101,12 +101,12 @@ MIN_CVSS_FOR_HIGHLIGHT = 7.0  # Solo resaltar CVEs con CVSS ≥ este valor
 # Tokens máximos de contenido por artículo enviados a Stage 2.
 # Con Ollama (num_ctx=2048): máx ~800 (prompt + contenido + respuesta JSON deben caber).
 # Con cloud providers (OpenAI/Claude/Gemini): 2000-3000 para capturar IOCs y TTPs del cuerpo completo.
-ARTICLE_MAX_TOKENS = 800
+ARTICLE_MAX_TOKENS = 2500
 
 # Tokens máximos del JSON de salida por artículo en Stage 2.
 # Ollama: 600 (ajustado a num_ctx=2048 — prompt+contenido+respuesta deben caber).
 # Cloud:  900 — artículos largos (USN, Patch Tuesday) listan 50+ paquetes y se cortan con 600.
-SUMMARY_MAX_TOKENS = 600
+SUMMARY_MAX_TOKENS = 900
 
 # Categorías del OPML a incluir (None = todas las 5 categorías)
 # Opciones: "Cibersecurity", "Hacking & Research", "Threat Intel", "Vulnerability", "LATAM"
@@ -180,7 +180,7 @@ ENRICHMENT_ENABLED = True
 ENRICHERS = {
     "ipsum":         True,
     "openphish":     True,
-    "ip_reputation": False,
+    "ip_reputation": True,
 }
 
 IPSUM_URL       = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
@@ -188,7 +188,7 @@ IPSUM_MIN_SCORE = 3      # nº mínimo de listas públicas que reportan la IP
 OPENPHISH_URL   = "https://openphish.com/feed.txt"
 
 # ip_reputation (librería ipcheck):
-IPCHECK_DIR     = "/home/dust115/projects/tools/ipcheck"  # ruta al repo ipcheck
+IPCHECK_DIR     = "/home/dust/Projects/Intel/ipcheck"  # ruta al repo ipcheck
 ENRICH_MAX_IPS  = 25     # tope de IPs consultadas por API (protege cuota)
 ENRICH_VT_SLEEP = 15     # segundos entre IPs que alcanzan Nivel 3 (rate-limit VT)
 
@@ -249,9 +249,9 @@ PHASE_CATEGORY_MAP = {
 #   "synthesis":     "gpt-4.1"
 #
 # Claude:
-#   "vulnerability": "claude-sonnet-4-6",        "threat_intel": "claude-sonnet-4-6",
+#   "vulnerability": "claude-sonnet-5",           "threat_intel": "claude-sonnet-5",
 #   "latam":         "claude-haiku-4-5-20251001", "general":      "claude-haiku-4-5-20251001",
-#   "synthesis":     "claude-opus-4-7"            # síntesis cross-domain se beneficia del modelo más potente
+#   "synthesis":     "claude-opus-5"              # síntesis cross-domain se beneficia del modelo más potente
 #
 # Gemini:
 #   "vulnerability": "gemini-2.5-pro",    "threat_intel": "gemini-2.5-pro",
@@ -260,11 +260,11 @@ PHASE_CATEGORY_MAP = {
 #
 # Ollama GPU: dejar todos en None → usa REPORT_MODEL para todas las fases
 PHASE_MODELS: dict = {
-    "vulnerability": None,
-    "threat_intel":  None,
-    "latam":         None,
-    "general":       None,
-    "synthesis":     None,
+    "vulnerability": "claude-sonnet-5",
+    "threat_intel":  "claude-sonnet-5",
+    "latam":         "claude-haiku-4-5-20251001",
+    "general":       "claude-haiku-4-5-20251001",
+    "synthesis":     "claude-opus-5",
 }
 
 # Tokens máximos de salida por fase

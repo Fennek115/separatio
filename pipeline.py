@@ -21,6 +21,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# El .env vive en ~/Projects/Intel/.env (un nivel arriba del repo). Se carga acá,
+# en el entrypoint y antes de importar config —no en config.py— para que
+# os.getenv() ya vea las claves sin efectos en tiempo de import.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 import config
 from miniflux_client import MinifluxClient
 from extractor import extract_article_text, truncate_text
