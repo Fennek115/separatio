@@ -1,0 +1,22 @@
+# API keys - NUNCA subir
+.env
+
+# Reportes y datos de corridas (nunca al repo - es público)
+threat_report_*.json
+data/
+*.log
+ip_threat_checker.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Windows / WSL
+*.Zone.Identifier
+*:Zone.Identifier
+Thumbs.db
