@@ -763,6 +763,14 @@ def main():
     if args.categories:
         config.FEED_CATEGORIES = [c.strip() for c in args.categories.split(",")]
 
+    if args.dry_run:
+        # Un dry-run escribe los mismos artefactos que una corrida real (informe,
+        # caché, history) y por lo tanto PISA los del día si ya corriste. Se aísla
+        # todo bajo OUTPUT_DIR/dryrun/, con su propio history.json descartable.
+        config.OUTPUT_DIR = str(Path(config.OUTPUT_DIR) / "dryrun")
+        config.HISTORY_FILE = str(Path(config.OUTPUT_DIR) / "history.json")
+        logger.info("Modo --dry-run: salidas aisladas en %s", config.OUTPUT_DIR)
+
     Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
     if args.weekly:
@@ -813,7 +821,7 @@ def main():
     save_summaries_cache(summaries, date_str)
     ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str))
 
-    if config.MARK_AS_READ and not args.no_mark_read:
+    if config.MARK_AS_READ and not args.no_mark_read and not args.dry_run:
         client.mark_as_read([a["article_id"] for a in articles])
 
     if not args.dry_run and config.PROVIDER == "ollama":
