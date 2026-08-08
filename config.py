@@ -270,11 +270,16 @@ PHASE_MODELS: dict = {
 # Tokens máximos de salida por fase
 # Ollama CPU: bajar ~40% (ver README para tabla completa por proveedor)
 PHASE_MAX_TOKENS: dict = {
-    "vulnerability": 4500,  # 3500 se cortaba con 63 artículos y 14K tokens de input
-    "threat_intel":  3000,
-    "latam":         1800,
-    "general":       1500,
-    "synthesis":     2000,
+    # En Sonnet 5 / Opus 5 el thinking va activo por defecto y max_tokens tapa
+    # thinking + texto: los valores viejos (4500/3000/1800/1500/2000, sin
+    # thinking) truncaban el 100% de las fases. Con 9000/6000/3600 las fases
+    # grandes seguían llenando el límite — estos valores ya no truncan.
+    # No pasar de ~16000 sin streaming (timeout HTTP del SDK).
+    "vulnerability": 16000,
+    "threat_intel":  12000,
+    "latam":         8000,
+    "general":       3000,
+    "synthesis":     4000,
 }
 
 # Máximo de artículos enviados al prompt de cada fase (top N por severidad)

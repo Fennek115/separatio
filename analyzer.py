@@ -318,16 +318,20 @@ def _llm_chat(
     elif provider == "claude":
         import anthropic
         client = anthropic.Anthropic(api_key=_get_api_key("claude"))
+        # Los modelos Claude actuales (Sonnet 5 / Opus 5 / 4.7+) rechazan los
+        # parámetros de sampling (temperature/top_p/top_k) con 400 — se omiten.
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            temperature=temperature,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
         _log_usage(provider, response.usage.input_tokens, response.usage.output_tokens,
                    response.stop_reason, max_tokens)
-        return _strip_llm_output(response.content[0].text)
+        # Sonnet 5 / Opus 5 piensan por defecto: content puede empezar con
+        # bloques "thinking" — quedarse solo con los bloques de texto.
+        text = "".join(b.text for b in response.content if b.type == "text")
+        return _strip_llm_output(text)
 
     elif provider == "openai":
         import openai

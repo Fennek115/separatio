@@ -17,14 +17,25 @@ Hecho:
 - `PROVIDER = "claude"` con modelos vigentes (`claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5-20251001`). Ollama quedó como legacy: **el CT 111 ya no existe**.
 - Los 3 enrichers encendidos; `IPCHECK_DIR` apunta a `~/Projects/Intel/ipcheck`.
 - Secretos en `~/Projects/Intel/.env` (fuera del repo); `pipeline.py` lo carga con `load_dotenv()` antes de `import config`. Scripts sueltos (`setup_check.py`, tests manuales) NO lo cargan solos.
-- Miniflux (CT 112, `192.168.1.7:8080`): auth por API token (`MINIFLUX_API_TOKEN` en el `.env`). Categorías ya alineadas con `PHASE_CATEGORY_MAP`: `Cibersecurity`, `Hacking & Research`, `Threat Intel`, `Vulnerability`, `LATAM`.
+- Miniflux (CT 112, `192.168.1.7:8080`): auth por API token (`MINIFLUX_API_TOKEN` en el `.env`). **Los feeds viven bajo el usuario `threat_intel` (id 12), NO bajo `admin`** — el token del `.env` es el de ese usuario (corregido 2026-08-08; con el token de `admin` el pipeline veía 0 feeds). Categorías alineadas con `PHASE_CATEGORY_MAP`: `Cibersecurity` (58), `Hacking & Research` (59), `Threat Intel` (60), `Vulnerability` (61), `LATAM` (62). 41 feeds, 0 errores (verificado por API 2026-08-08); `../feeds.opml` es el espejo curado.
 - Venv en `./venv/` con `requirements.txt` + `requirements-dev.txt` + `anthropic`. Los 14 tests pasan.
 
 Pendiente (en orden):
-1. **`ANTHROPIC_API_KEY` en `~/Projects/Intel/.env`** — sin eso el pipeline no corre. La pone el usuario.
-2. La categoría `LATAM` de Miniflux existe pero **no tiene feeds** — hasta que el usuario le asigne, esa sección del informe sale vacía.
-3. `VIRUSTOTAL_API_KEY` no está en el `.env` → VT queda fuera del enricher `ip_reputation` (aceptado). GreyNoise: sin clave (no acepta correos Proton).
-4. Paso 6 de F0: `setup_check.py` → `--dry-run` → `--limit 5` → corrida completa.
+1. ~~`ANTHROPIC_API_KEY`~~ **En el `.env` desde 2026-08-08** — ojo: es una key temporal de
+   prueba que caduca en días; el usuario la va a reemplazar por la definitiva.
+2. ~~LATAM sin feeds~~ **Resuelto 2026-08-08**: LATAM (id 62) tiene 6 feeds (CyberSecurity News ES, DragonJAR, El Lado del Mal, Segu-Info, Una Al Día, WeLiveSecurity la-es).
+3. `VIRUSTOTAL_API_KEY` no está en el `.env` raíz **pero sí en `ipcheck/.env`** (que el pipeline no carga) — se rescata al unificar los `.env` (fase 4 de `../PLAN-REORDEN.md`). GreyNoise: sin clave (no acepta correos Proton).
+4. ~~Paso 6 de F0~~ **Completado 2026-08-08**: `setup_check` ✓ → `--dry-run` ✓ (120 arts,
+   ruteo OK) → `--limit 5` ✓ → corrida completa ✓ (116 resúmenes, 0 fallos, ~8 min).
+   Tres fixes salieron de esa prueba (sin commitear aún):
+   - `analyzer.py`: se quitó `temperature` de la rama claude (Sonnet 5/Opus 5 lo rechazan con 400).
+   - `analyzer.py`: la respuesta puede empezar con bloques `thinking` (activo por defecto
+     en Sonnet 5/Opus 5) — se filtran solo los bloques de texto en vez de `content[0]`.
+   - `config.py`: `PHASE_MAX_TOKENS` subidos (16000/12000/8000/3000/4000) — max_tokens ahora
+     tapa thinking+texto y los valores viejos truncaban todas las fases al 100%.
+   Bugs menores vistos y NO arreglados: enricher OpenPhish falla con "Invalid IPv6 URL"
+   (tolerado por el try/except de Stage 2.7); warnings "discarding data: None" de
+   trafilatura en Stage 1 (cosmético).
 5. **Dónde corre y automatización: decisión diferida.** El usuario quiere primero repensar la arquitectura (unificar los repos de `~/Projects/Intel/` y separar por módulos) antes de decidir cron/timer y ubicación. No crear CTs ni crons sin esa decisión.
 6. Criterio de cierre de F0: dos semanas de informes diarios sin intervención.
 
@@ -43,7 +54,7 @@ Install deps: `./venv/bin/pip install -r requirements.txt -r requirements-dev.tx
 
 ## Infrastructure (Proxmox host `motherbase`, 192.168.1.200)
 
-- **LXC 112 — miniflux**: Miniflux 2.3.1 on `192.168.1.7:8080`. Pipeline auths with `MINIFLUX_API_TOKEN` (in `~/Projects/Intel/.env`); feeds live under the `admin` user.
+- **LXC 112 — miniflux**: Miniflux 2.3.1 on `192.168.1.7:8080`. Pipeline auths with `MINIFLUX_API_TOKEN` (in `~/Projects/Intel/.env`); feeds live under the `threat_intel` user (id 12), not `admin`.
 - **LXC 111 — ollama: no longer exists.** Removed after the local-LLM path was discarded (~3.5 h/run on CPU). Any doc mentioning it describes the past.
 
 ## Models
