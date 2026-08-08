@@ -3,7 +3,7 @@
 SOC IP Threat Intelligence Checker
 Verifica IPs contra AbuseIPDB, VirusTotal, GreyNoise, AlienVault OTX,
 URLhaus y ThreatFox (abuse.ch)
-Uso: python3 ip_threat_checker.py [archivo.txt]
+Uso: ipcheck [archivo.txt]
 """
 
 import argparse
@@ -13,11 +13,14 @@ import time
 import sys
 import os
 from datetime import datetime
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 from ipcheck import ip_enricher
 
-load_dotenv()
+# El .env único vive en la raíz del monorepo (dos niveles arriba de este archivo).
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # ─── CONFIGURACIÓN ────────────────────────────────────────
 ABUSEIPDB_API_KEY  = os.environ.get("ABUSEIPDB_API_KEY",  "TU_API_KEY_AQUI")
