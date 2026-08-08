@@ -1,11 +1,12 @@
 # DEPLOY — dónde y cada cuánto corre Separatio
 
-Escrito el 2026-08-08, al activar la infraestructura de pruebas. Dos partes: lo que **está
-corriendo hoy** (laptop) y el **diseño definitivo** (LXC en `motherbase`), para ejecutarlo
-tal cual cuando el usuario esté cerca del server.
+Escrito el 2026-08-08. **El pipeline corre en el LXC 113 (`intel`) de `motherbase`** — abajo
+está el as-built completo. Hubo una versión efímera con timers en el laptop ese mismo día;
+se desmontó a las horas (decisión del usuario: las pruebas van en contenedores, no en la
+máquina de trabajo) y no queda nada de ella en `thinkfox`.
 
-**Regla heredada: verificar contra la máquina.** El estado real de los timers se consulta con
-los comandos de §2.3, no leyendo este documento.
+**Regla heredada: verificar contra la máquina.** El estado real se consulta con los comandos
+de §4, no leyendo este documento.
 
 ---
 
@@ -19,118 +20,77 @@ los comandos de §2.3, no leyendo este documento.
 El backlog de Miniflux (~26 mil no leídos históricos) no es un problema: cada corrida toma como
 máximo 120 artículos priorizados con tope por feed, y marca leídos solo esos.
 
----
-
-## 2. Infraestructura de PRUEBAS — laptop `thinkfox` (ACTIVA desde 2026-08-08)
-
-Timers de systemd **de usuario** (no root). Elegida porque el usuario está lejos del server y
-la `ANTHROPIC_API_KEY` actual es temporal: cero impacto en `motherbase`, fácil de apagar.
-
-### 2.1 Qué hay instalado
-
-En `~/.config/systemd/user/`:
-
-- `separatio.service` + `separatio.timer` — diaria 07:00, `Persistent=true`
-- `separatio-weekly.service` + `separatio-weekly.timer` — lunes 08:00, `Persistent=true`
-
-`Persistent=true`: si el laptop estaba apagado o suspendido a la hora del timer, la corrida se
-dispara al despertar en lugar de perderse. Los secretos salen del `.env` de la raíz del repo
-(los entry points lo cargan por ruta absoluta, así que no dependen del working directory).
-
-### 2.2 Limitación conocida
-
-El informe del día sale solo si el laptop se enciende ese día. Para el criterio de F0 («dos
-semanas de informes sin intervención») sirve mientras el laptop sea de uso diario; el LXC
-elimina esa dependencia.
-
-### 2.3 Operación
-
-```bash
-systemctl --user list-timers | grep separatio      # próximas corridas
-journalctl --user -u separatio.service -n 50       # log de la última corrida (también reports/pipeline.log)
-systemctl --user start separatio.service           # forzar una corrida ahora
-systemctl --user disable --now separatio.timer separatio-weekly.timer   # APAGAR (obligatorio antes de encender el LXC)
-```
+`Persistent=true` en ambos timers: si el CT estaba apagado a la hora del timer, la corrida
+sale al arrancar en lugar de perderse.
 
 ---
 
-## 3. Diseño DEFINITIVO — LXC en `motherbase` (pendiente de ejecución)
+## 2. As-built — LXC 113 `intel` (activo desde 2026-08-08)
 
-**Prerrequisitos, en orden:**
-
-1. `ANTHROPIC_API_KEY` definitiva (la temporal caduca).
-2. **Reinicio pendiente del host** (kernel instalado sin cargar, uptime >90 días). Hacerlo
-   con el usuario cerca del server, vigilando que el zram levante `zstd 8G` y los 10 CTs
-   vuelvan (ver `Motherbase/ESTADO.md`).
-3. Usuario en la LAN o con vía de rescate, por si el CT nuevo da problemas.
-
-### 3.1 El contenedor
-
-| Parámetro | Valor | Nota |
-|---|---|---|
-| Plantilla | Debian 13 (misma base que el resto) | |
-| Tipo | **Unprivileged**, sin features extra | Solo corre Python |
-| vCPU / RAM | 1 vCPU, **512 MiB** + swap zram del host | La corrida es I/O de red + llamadas API; los 8 workers son threads esperando red. Si OOMea en la práctica, subir a 768 MiB — el host quedó con ~5 GiB libres tras F1 |
-| Disco | 4 GiB | Repo + venv + reports (texto) |
-| Red | DHCP estático en la LAN, como los demás CTs | Necesita salida a internet (feeds, APIs) y llegar a `192.168.1.7:8080` (CT 112 Miniflux) |
-| Onboot | `onboot=1`, `order` después del CT 112 | Miniflux tiene que estar arriba antes de las 07:00 |
-
-Registrar el CT en `Motherbase/INVENTARIO.md` al crearlo (regla del proyecto madre).
-
-### 3.2 Aprovisionamiento
+Creado con el helper de community-scripts en modo desatendido (variables `var_*` + `mode=default`
+por entorno, `TERM` seteado porque el script llama `clear`):
 
 ```bash
-apt install -y git python3-venv
-git clone https://github.com/Fennek115/separatio.git /opt/intel     # repo público, clone por https
-cd /opt/intel && python3 -m venv venv && venv/bin/pip install -e '.[dev]'
-venv/bin/pytest tests/ -q                                            # 24 tests, sin red
+# en el host PVE
+export TERM=xterm-256color mode=default var_ctid=113 var_hostname=intel \
+       var_cpu=1 var_ram=512 var_disk=4 var_os=debian var_version=13 \
+       var_unprivileged=1 var_tags=intel var_container_storage=local-zfs var_template_storage=local
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/ct/debian.sh)"
 ```
 
-### 3.3 Secretos (esquema de PLAN-REORDEN §4)
+| Parámetro | Valor |
+|---|---|
+| CT | **113**, hostname `intel`, Debian 13, unprivileged, `onboot=1` |
+| Recursos | 1 vCPU, 512 MiB RAM + 512 MiB swap, 4 GiB en `local-zfs` (si OOMea en la práctica, subir a 768 MiB) |
+| Red | DHCP en vmbr0 → **192.168.1.55**. Llega a Miniflux (CT 112, `192.168.1.7:8080`) y a internet |
+| Código | `/opt/intel/app` — clone **https** del repo público, dueño `intel` (usuario de sistema sin login). Venv en `/opt/intel/app/venv` con `pip install -e '.[dev]'` (Python 3.13); los 28 tests pasan |
+| Secretos | `/etc/intel/intel.env`, `root:root 0600` — copia de las 12 variables del `.env` del laptop. **No hay `.env` en el clone**: el `load_dotenv()` no encuentra nada y las variables llegan por `EnvironmentFile=` de systemd. ⚠️ La `ANTHROPIC_API_KEY` que tiene es la **temporal** |
+| Units | `/etc/systemd/system/`: `separatio.{service,timer}` y `separatio-weekly.{service,timer}`. Service: `Type=oneshot`, `User=intel`, `WorkingDirectory=/opt/intel/app`, `EnvironmentFile=/etc/intel/intel.env`, `TimeoutStartSec=2h`, `Nice=10` |
+| Salidas | `/opt/intel/app/separatio/reports/YYYY-MM-DD/` + `history.json` + `pipeline.log`, y el journal del CT |
 
-**Sin `.env` en el repo clonado.** Las 12 variables van en `/etc/intel/intel.env`,
-`root:root 0600`, copiadas a mano desde la bóveda rbw/Bitwarden (nota «Intel API keys»).
-El `load_dotenv()` de los entry points no encuentra `.env` y no hace nada; las variables
-llegan por `EnvironmentFile=` de systemd. Diseño ya previsto — no hay que tocar código.
+Verificado al desplegar: `separatio-check` todo verde bajo las condiciones exactas del service
+(`systemd-run -p User=intel -p EnvironmentFile=...`), y un `--dry-run --limit 5` completo OK.
 
-### 3.4 Units (system, no user)
+---
 
-`/etc/systemd/system/separatio.service`:
+## 3. Pendientes de este deploy
 
-```ini
-[Unit]
-Description=Separatio — informe diario de threat intel
-After=network-online.target
-Wants=network-online.target
+1. ⚠️ **Key definitiva:** cuando el usuario salga de pruebas, editar `/etc/intel/intel.env`
+   (solo la línea `ANTHROPIC_API_KEY=`) — no hace falta tocar nada más. Actualizar también la
+   bóveda rbw (nota «Intel API keys»).
+2. **Backup:** el CT 113 no está en los jobs (`backup-4bb41709` local ni `backup-036d95d7`
+   offsite) — los jobs listan CTs por ID. Decidir si se agrega: el CT es reconstruible desde
+   git + `intel.env`, pero `reports/` (el corpus, insumo de F4) solo vive ahí.
+3. **Reinicio pendiente del host:** al reiniciar `motherbase`, verificar que el 113 vuelva con
+   los demás y que el timer siga armado (§4).
 
-[Service]
-Type=oneshot
-User=intel
-WorkingDirectory=/opt/intel
-EnvironmentFile=/etc/intel/intel.env
-ExecStart=/opt/intel/venv/bin/separatio
-TimeoutStartSec=2h
-Nice=10
+---
+
+## 4. Operación
+
+```bash
+ssh proxmox 'pct exec 113 -- systemctl list-timers'                     # próximas corridas
+ssh proxmox 'pct exec 113 -- journalctl -u separatio.service -n 50'     # log de la última corrida
+ssh proxmox 'pct exec 113 -- ls /opt/intel/app/separatio/reports/'      # informes generados
+ssh proxmox 'pct exec 113 -- systemctl start separatio.service'         # forzar una corrida ahora
 ```
 
-(Usuario de sistema `intel` sin login, dueño de `/opt/intel`. El timer es idéntico al del
-laptop: `OnCalendar=*-*-* 07:00`, `Persistent=true`, `RandomizedDelaySec=5m`; y el par
-`-weekly` con `Mon *-*-* 08:00` y `--weekly`.)
+Actualizar código:
 
-### 3.5 Conmutación (evitar corridas dobles)
+```bash
+ssh proxmox 'pct exec 113 -- sudo -u intel git -C /opt/intel/app pull'
+ssh proxmox 'pct exec 113 -- bash -c "cd /opt/intel/app && sudo -u intel venv/bin/pip install -q -e \".[dev]\" && sudo -u intel venv/bin/pytest tests/ -q"'
+```
 
-⚠️ **Nunca los dos timers activos a la vez**: dos corridas el mismo día se pisan los leídos
-de Miniflux y el informe del día. El orden es:
+Los reports crecen en texto plano; revisar tamaño cada tanto
+(`du -sh /opt/intel/app/separatio/reports`). El corpus histórico es insumo de F4 — no borrar
+sin criterio.
 
-1. Aprovisionar el CT y probar **a mano** una corrida completa (`venv/bin/separatio`).
-2. Verificar el informe en `/opt/intel/separatio/reports/<fecha>/`.
-3. **Apagar los timers del laptop** (§2.3, última línea).
-4. Encender los timers del CT: `systemctl enable --now separatio.timer separatio-weekly.timer`.
-5. Al día siguiente, verificar que el informe salió solo. Desde ahí cuentan las dos semanas
-   del criterio de cierre de F0.
+---
 
-### 3.6 Mantenimiento
+## 5. Criterio de cierre de F0
 
-- Actualizar código: `git -C /opt/intel pull && venv/bin/pip install -e '.[dev]' && venv/bin/pytest tests/ -q`.
-- Los reports crecen en texto plano; revisar tamaño cada tanto (`du -sh /opt/intel/separatio/reports`).
-  Si molesta, rotar carpetas de más de N meses — el corpus histórico es insumo de F4, no borrar sin criterio.
+**Dos semanas de informes generados solos, sin intervención**, contando desde la primera
+corrida automática del CT (2026-08-08 a las 07:00 si el timer ya estaba armado ese día, o la
+primera que salga). Verificar con la primera línea de §4: debe aparecer una carpeta de fecha
+nueva cada día.

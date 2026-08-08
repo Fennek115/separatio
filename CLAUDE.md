@@ -52,20 +52,20 @@ anteriores a `7b675cf` con `--dry-run` un día que ya tuvo corrida real.**
 
 ## Automatización (activa desde 2026-08-08)
 
-**Infraestructura de PRUEBAS corriendo en este laptop:** timers systemd de usuario —
-`separatio.timer` (diario 07:00) y `separatio-weekly.timer` (lunes 08:00), ambos
-`Persistent=true` (si el laptop estaba apagado, la corrida sale al despertar). Cadencia
-decidida, operación y el **diseño definitivo (LXC en `motherbase`) listo para ejecutar** en
-`docs/DEPLOY.md`. ⚠️ Al encender el LXC, apagar los timers del laptop **primero** — dos
-corridas el mismo día se pisan los leídos de Miniflux (checklist en `DEPLOY.md` §3.5).
+**El pipeline corre en el LXC 113 (`intel`, `192.168.1.55`) de `motherbase`**: timers systemd
+diario 07:00 y semanal lunes 08:00, ambos `Persistent=true`. Código en `/opt/intel/app`
+(clone del repo público), secretos en `/etc/intel/intel.env` root:600, corre como usuario de
+sistema `intel`. As-built completo, operación y pendientes del deploy en `docs/DEPLOY.md`.
+En el laptop **no queda nada** corriendo (hubo timers de usuario unas horas ese día; se
+desmontaron — las pruebas van en contenedores).
 
 ## Pendiente (en orden)
 
-1. ⚠️ **`ANTHROPIC_API_KEY` definitiva** (la actual es temporal de prueba; el usuario decidió
-   esperar a que termine la etapa de pruebas para ponerla).
-2. **Ejecutar el deploy definitivo** (`docs/DEPLOY.md` §3) cuando el usuario esté cerca del
-   server: pide el reinicio pendiente del host (kernel sin cargar) y la key definitiva. Con el
-   CT andando arrancan las **dos semanas de informes sin intervención** que cierran F0.
+1. ⚠️ **`ANTHROPIC_API_KEY` definitiva** (la del CT es la temporal de prueba; el usuario decidió
+   esperar a que termine la etapa de pruebas). Cambiarla = editar una línea de
+   `/etc/intel/intel.env` en el CT 113.
+2. **Dos semanas de informes solos** (criterio de cierre de F0) — verificar cada tanto con
+   `docs/DEPLOY.md` §4. Decidir si el CT 113 entra en los jobs de backup (hoy no está).
 3. Decidir si se archiva `Fennek115/ip_threatcheck` en GitHub.
 4. Frente 2: OCR de imágenes en Stage 1–2 (idea AIOCRIOC, ~15 líneas con pytesseract;
    ver `docs/CAPAS-Y-FUENTES.md`). Recién después del deploy.
