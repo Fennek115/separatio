@@ -4,24 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running the tool
 
-```bash
-pip install -r requirements.txt
+Desde 2026-08-08 esto es el paquete `ipcheck` del monorepo `~/Projects/Intel/`
+(instalado con `pip install -e '.[dev]'` en la raíz; deps en el `pyproject.toml` raíz):
 
+```bash
 # Default — reads IPs from ips.txt
-python3 ip_threat_checker.py
+venv/bin/ipcheck
 
 # Custom IP file
-python3 ip_threat_checker.py my_ips.txt
+venv/bin/ipcheck my_ips.txt
+
+# Orquestador Wazuh completo
+venv/bin/ipcheck-run alertas_wazuh.csv
 ```
 
 Output: colored terminal summary + a timestamped JSON file (`threat_report_YYYYMMDD_HHMMSS.json`).
 
 ## API key configuration
 
-Keys are loaded from a `.env` file (gitignored) via `python-dotenv`:
+Keys are loaded from the **root monorepo `.env`** (gitignored) via `python-dotenv` —
+`cli.py` lo carga explícitamente; ya no existe `ipcheck/.env`:
 
 ```bash
-cp .env.example .env   # then edit .env with real keys
+cp .env.example .env   # en la raíz del monorepo; luego editar con las keys reales
 ```
 
 The script reads them with `os.environ.get("KEY_NAME", "TU_API_KEY_AQUI")`. If a key is missing or equals `"TU_API_KEY_AQUI"`, that provider is skipped with `[SKIP]`.
@@ -41,9 +46,9 @@ GreyNoise, URLhaus, and Feodo Tracker require no key — always enabled.
 ### Pipeline files
 | File | Role |
 |---|---|
-| `run.py` | Orchestrator — runs procesar_excel.py then ip_threat_checker.py |
+| `run.py` | Orchestrator (`ipcheck-run`) — runs `ipcheck.procesar_excel` then `ipcheck.cli` as modules |
 | `procesar_excel.py` | Step 1 — extracts public IPs from Wazuh CSV/Excel export |
-| `ip_threat_checker.py` | Step 2 (CLI) — colored output, history, Excel; delegates HTTP to `ip_enricher` |
+| `cli.py` | Step 2 (CLI, entry point `ipcheck`; ex `ip_threat_checker.py`) — colored output, history, Excel; delegates HTTP to `ip_enricher` |
 | `ip_enricher.py` | **Reusable library** — pure check_* functions + `IpEnricher.enrich(ip)`; no globals, no I/O, no color |
 
 ### Reusable library (`ip_enricher.py`)
@@ -71,12 +76,13 @@ r = IpEnricher(ApiKeys.from_env()).enrich("185.220.101.45")
 The CLI keeps identical behavior: its `check_*` are thin wrappers that call the
 library and update the global `api_stats`; `get_risk_level` adds terminal color.
 
-Consumed by the `threat-intel` pipeline via its `enrichers/ip_reputation.py`
-(Stage 2.7), which imports `ip_enricher` by path (`IPCHECK_DIR`).
+Consumed by the `separatio` pipeline via its `enrichers/ip_reputation.py`
+(Stage 2.7), which does `from ipcheck import ip_enricher` (package import;
+the old `IPCHECK_DIR` path hack died with the monorepo, 2026-08-08).
 
-Tests: `python3 -m pytest tests/ -q` (no network — HTTP monkeypatched).
+Tests: `venv/bin/pytest tests/ -q` desde la raíz del monorepo (no network — HTTP monkeypatched).
 
-### ip_threat_checker.py flow
+### cli.py flow (ex ip_threat_checker.py)
 
 1. `verify_api_keys()` — connectivity check against all 8 APIs using `8.8.8.8`; returns 8-tuple of booleans
 2. `load_ips()` — parses the input file into `[{"ip": ..., "user": ...}]`

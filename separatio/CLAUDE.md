@@ -6,25 +6,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Automated pipeline that reads cybersecurity RSS feeds from Miniflux, summarizes each article with a cloud LLM provider (Claude — also supports OpenAI, Gemini, or legacy local Ollama), and generates a daily Threat Intelligence report in Markdown, HTML, and/or PDF.
 
-## Estado actual (2026-08-07) — leer antes de tocar nada
+## Estado actual (2026-08-08) — leer antes de tocar nada
 
-Este repo es la pieza central de la fase **F0** del proyecto documentado en
+Este paquete es la pieza central de la fase **F0** del proyecto documentado en
 `~/Projects/Motherbase/` (leer `ESTADO.md` y `fases/F0-separatio.md` de allá para el plan completo).
+Desde el 2026-08-08 vive como paquete `separatio` dentro del **monorepo** `~/Projects/Intel/`
+(ver el `CLAUDE.md` de la raíz y `../docs/PLAN-REORDEN.md`).
 Regla de ese proyecto que aplica acá: **verificar contra la máquina, no contra el documento.**
 
 Hecho:
 - Trabajo de junio (Stage 2.7, `net.py`, tests) commiteado y en `origin/main`.
 - `PROVIDER = "claude"` con modelos vigentes (`claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5-20251001`). Ollama quedó como legacy: **el CT 111 ya no existe**.
-- Los 3 enrichers encendidos; `IPCHECK_DIR` apunta a `~/Projects/Intel/ipcheck`.
-- Secretos en `~/Projects/Intel/.env` (fuera del repo); `pipeline.py` lo carga con `load_dotenv()` antes de `import config`. Scripts sueltos (`setup_check.py`, tests manuales) NO lo cargan solos.
-- Miniflux (CT 112, `192.168.1.7:8080`): auth por API token (`MINIFLUX_API_TOKEN` en el `.env`). **Los feeds viven bajo el usuario `threat_intel` (id 12), NO bajo `admin`** — el token del `.env` es el de ese usuario (corregido 2026-08-08; con el token de `admin` el pipeline veía 0 feeds). Categorías alineadas con `PHASE_CATEGORY_MAP`: `Cibersecurity` (58), `Hacking & Research` (59), `Threat Intel` (60), `Vulnerability` (61), `LATAM` (62). 40 feeds, 0 errores (verificado por API 2026-08-08); `../feeds.opml` es el espejo curado (40 entradas).
-- Venv en `./venv/` con `requirements.txt` + `requirements-dev.txt` + `anthropic`. Los 14 tests pasan.
+- Los 3 enrichers encendidos; `ipcheck` se importa como paquete del monorepo (**VirusTotal
+  activo** desde el `.env` único, 2026-08-08).
+- Secretos en el `.env` de la raíz del monorepo; lo cargan los entry points (`pipeline.py`
+  y `setup_check.py`) con `load_dotenv()` antes de importar `config`.
+- Miniflux (CT 112, `192.168.1.7:8080`): auth por API token (`MINIFLUX_API_TOKEN` en el `.env`). **Los feeds viven bajo el usuario `threat_intel` (id 12), NO bajo `admin`** — el token del `.env` es el de ese usuario (corregido 2026-08-08; con el token de `admin` el pipeline veía 0 feeds). Categorías alineadas con `PHASE_CATEGORY_MAP`: `Cibersecurity` (58), `Hacking & Research` (59), `Threat Intel` (60), `Vulnerability` (61), `LATAM` (62). 40 feeds, 0 errores (verificado por API 2026-08-08); `../feeds/feeds.opml` es el espejo curado (40 entradas).
+- Venv en la **raíz del monorepo** (`../venv/`, `pip install -e '.[dev]'`). Los tests viven
+  en `../tests/` (24 de ambos paquetes, todos pasan).
 
 Pendiente (en orden):
 1. ~~`ANTHROPIC_API_KEY`~~ **En el `.env` desde 2026-08-08** — ojo: es una key temporal de
    prueba que caduca en días; el usuario la va a reemplazar por la definitiva.
 2. ~~LATAM sin feeds~~ **Resuelto 2026-08-08**: LATAM (id 62) tiene 6 feeds (CyberSecurity News ES, DragonJAR, El Lado del Mal, Segu-Info, Una Al Día, WeLiveSecurity la-es).
-3. `VIRUSTOTAL_API_KEY` no está en el `.env` raíz **pero sí en `ipcheck/.env`** (que el pipeline no carga) — se rescata al unificar los `.env` (fase 4 de `../PLAN-REORDEN.md`). GreyNoise: sin clave (no acepta correos Proton).
+3. ~~`VIRUSTOTAL_API_KEY`~~ **Rescatada 2026-08-08** al `.env` único (fase 4 de
+   `../docs/PLAN-REORDEN.md`) — VT activo en el enricher `ip_reputation`. GreyNoise: sin clave
+   (no acepta correos Proton).
 4. ~~Paso 6 de F0~~ **Completado 2026-08-08**: `setup_check` ✓ → `--dry-run` ✓ (120 arts,
    ruteo OK) → `--limit 5` ✓ → corrida completa ✓ (116 resúmenes, 0 fallos, ~8 min).
    Tres fixes salieron de esa prueba (commiteados y pusheados en `25a000a`):
@@ -36,21 +43,26 @@ Pendiente (en orden):
    Bugs menores vistos y NO arreglados: enricher OpenPhish falla con "Invalid IPv6 URL"
    (tolerado por el try/except de Stage 2.7); warnings "discarding data: None" de
    trafilatura en Stage 1 (cosmético).
-5. **Dónde corre y automatización: decisión diferida.** El usuario quiere primero repensar la arquitectura (unificar los repos de `~/Projects/Intel/` y separar por módulos) antes de decidir cron/timer y ubicación. No crear CTs ni crons sin esa decisión.
+5. **Dónde corre y automatización: decisión diferida.** El reorden previo (monorepo +
+   packaging) se completó el 2026-08-08; falta solo decidir ubicación (LXC nuevo en
+   `motherbase` es lo natural) y timer. No crear CTs ni crons sin esa decisión.
 6. Criterio de cierre de F0: dos semanas de informes diarios sin intervención.
 
 ## Commands
 
+Desde la raíz del monorepo (`~/Projects/Intel/`), con los entry points del venv:
+
 ```bash
-python pipeline.py                    # full run
-python pipeline.py --dry-run          # fetch only, no LLM calls
-python pipeline.py --limit 20         # cap at 20 articles
-python pipeline.py --report-only      # re-generate report from today's cache JSON
-python pipeline.py --no-mark-read     # skip marking articles as read in Miniflux
-python setup_check.py                 # environment diagnostics
+venv/bin/separatio                    # full run
+venv/bin/separatio --dry-run          # fetch only, no LLM — AISLADO en reports/dryrun/,
+                                      #   no marca leídos en Miniflux (fix 2026-08-08)
+venv/bin/separatio --limit 20         # cap at 20 articles
+venv/bin/separatio --report-only      # re-generate report from today's cache JSON
+venv/bin/separatio --no-mark-read     # skip marking articles as read in Miniflux
+venv/bin/separatio-check              # environment diagnostics (carga el .env)
 ```
 
-Install deps: `./venv/bin/pip install -r requirements.txt -r requirements-dev.txt anthropic` (venv already exists in `./venv/`).
+Install deps: `venv/bin/pip install -e '.[dev]'` en la raíz (deps en `pyproject.toml`).
 
 ## Infrastructure (Proxmox host `motherbase`, 192.168.1.200)
 
@@ -154,7 +166,7 @@ Miniflux API (unread articles, ordered by published_at desc)
 
 **Enrichment (Stage 2.7) injects via `CorrelationContext.extra_blocks`**: rather than threading a new param through `generate_report`/`generate_phase_report`, `stage27_enrich` appends the enrichment prompt block to `correlation.extra_blocks`, which `format_for_prompt()` renders at the end. This keeps `analyzer.py` signatures untouched. Enrichment only reaches phases that already receive `correlation` (vulnerability, threat_intel).
 
-**`ip_reputation` enricher imports ipcheck by path**: `enrichers/ip_reputation.py` does `sys.path.insert(config.IPCHECK_DIR)` then `import ip_enricher` — the two local repos stay decoupled (no packaging/install). It paces VirusTotal (sleeps `ENRICH_VT_SLEEP`s only after an IP reaches Level 3) and caps calls at `ENRICH_MAX_IPS`.
+**`ip_reputation` enricher imports ipcheck as a package** (since 2026-08-08): `enrichers/ip_reputation.py` does `from ipcheck import ip_enricher` (lazy, inside `_load_lib`) — `IPCHECK_DIR` and the `sys.path.insert` hack are gone. It paces VirusTotal (sleeps `ENRICH_VT_SLEEP`s only after an IP reaches Level 3) and caps calls at `ENRICH_MAX_IPS`.
 
 **Paths are anchored to `PROJECT_ROOT`** (`config.py`): `OUTPUT_DIR`/`HISTORY_FILE` are absolute (`Path(__file__).parent`). Running from any cwd (cron) yields the same locations — previously relative paths scattered reports and silently reset trending history.
 
@@ -164,7 +176,7 @@ Miniflux API (unread articles, ordered by published_at desc)
 
 **Stage 2 fail-fast**: `stage2_summarize` aborts if ≥`STAGE2_FAIL_FAST_THRESHOLD` (0.5) of articles fail to summarize — avoids burning hours on Stage 3 to emit an empty report when the LLM provider is down.
 
-**Tests**: `python3 -m pytest tests/ -q` (deterministic, no network — HTTP monkeypatched). See `IMPROVEMENTS.md` for the full review and the roadmap of pending large refactors (provider abstraction, Jinja2 reporter, pipeline split).
+**Tests**: `venv/bin/pytest tests/ -q` desde la raíz del monorepo (deterministic, no network — HTTP monkeypatched). See `../docs/IMPROVEMENTS.md` for the full review and the roadmap of pending large refactors (provider abstraction, Jinja2 reporter, pipeline split).
 
 **`think` and `keep_alive` are top-level `chat()` params**: in the Ollama Python client they are NOT inside the `options` dict — they are direct keyword arguments to `client.chat()`. `options` only accepts model parameters (temperature, num_ctx, num_thread, etc.).
 
@@ -196,8 +208,8 @@ Miniflux API (unread articles, ordered by published_at desc)
 
 ## Configuration (`config.py`)
 
-Already set (2026-08-07): `PROVIDER = "claude"`, `MINIFLUX_URL = "http://192.168.1.7:8080"`,
-`MINIFLUX_API_TOKEN` from env. Only missing: `ANTHROPIC_API_KEY` in `~/Projects/Intel/.env`.
+Already set (2026-08-08): `PROVIDER = "claude"`, `MINIFLUX_URL = "http://192.168.1.7:8080"`,
+`MINIFLUX_API_TOKEN` y `ANTHROPIC_API_KEY` (⚠️ temporal) from the root `.env`.
 
 Key tunable values:
 
@@ -222,14 +234,14 @@ Key tunable values:
 | `NO_SCRAPE_DOMAINS` | vulners, sploitus, wiz.io | Domains that block scrapers — use RSS content only |
 | `STAGE2_FAIL_FAST_THRESHOLD` | 0.5 | Abort if ≥ this fraction of summaries fail |
 | `ENRICHMENT_ENABLED` | True | Master switch for Stage 2.7 |
-| `ENRICHERS` | all three on | Per-enricher toggles (VT skipped: no `VIRUSTOTAL_API_KEY`) |
+| `ENRICHERS` | all three on | Per-enricher toggles (VT active since 2026-08-08: key in the root `.env`) |
 | `IPSUM_MIN_SCORE` | 3 | Min public blocklists reporting an IP to flag it |
-| `IPCHECK_DIR` | path to ipcheck repo | For the `ip_reputation` enricher |
 | `ENRICH_MAX_IPS` / `ENRICH_VT_SLEEP` | 25 / 15 | API-IP cap / VT pacing (Level-3 IPs) |
 
 ## Scheduling — not decided yet
 
-There is **no cron/timer anywhere** today, on purpose: where the pipeline runs (new CT vs.
-systemd timer on the laptop `thinkfox`) is deferred until the user re-architects
-`~/Projects/Intel/` (unify repos, split by modules). Do not create CTs or crons before that
-decision. With a cloud provider a full run is ~5 min, so scheduling is cheap once decided.
+There is **no cron/timer anywhere** today, on purpose. The monorepo/packaging prerequisite
+was completed 2026-08-08; the remaining decision is where it runs (a new LXC on `motherbase`
+is the natural choice — see `../docs/PLAN-REORDEN.md` §4 for the EnvironmentFile scheme).
+Do not create CTs or crons before that decision. With a cloud provider a full run is
+~8–15 min (VT pacing included), so scheduling is cheap once decided.

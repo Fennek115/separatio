@@ -72,6 +72,10 @@ Descartados por muertos: `blog.cronup.com/feed` (timeout), `csirt.gob.cl/feed/` 
 
 ## 3. Arquitectura objetivo: monorepo `Intel` con paquetes
 
+> **EJECUTADO 2026-08-08** (fases 2–3 de §5). Decisión del usuario sobre el nombre: el remoto
+> "probablemente se llame algo como separatio" — el monorepo **continúa** `Fennek115/separatio`
+> (historia preservada; ipcheck entró por subtree). Sin renombres en GitHub por ahora.
+
 **Decisión propuesta: un solo repo** (renombrar el remoto `Fennek115/separatio` → `Fennek115/intel`
 o crear `intel` y archivar el viejo). Razones: un solo operador, las piezas ya están acopladas por
 filesystem (`IPCHECK_DIR` + `sys.path.insert`), un `.env`, y **una sola unidad de deploy** al LXC.
@@ -152,14 +156,20 @@ Fases chicas, cada una verificable y commiteable. Las 1–4 no necesitan la API 
    commitearon los 5 modificados; se destrackeó `ip_threat_checker.txt` (IPs reales de una
    investigación — el repo es **público**) y se extendió el `.gitignore` (que ya existía
    trackeado y ocultaba los `threat_report_*.json`). Tests: 10/10 pasan. → `git status` limpio.
-2. **Armar el monorepo** — convertir `~/Projects/Intel/` en el repo (subtree de los dos),
-   renombrar `threat intel/` → `separatio/`, borrar el OPML duplicado y `Zone.Identifier`,
-   sacar `venv/`/`output-threatintel/` del árbol versionado. → historia de ambos preservada.
-3. **Packaging** — `pyproject.toml`, entry points, import de paquete en `ip_reputation.py`,
-   rutas por env var. Venv nuevo en la raíz con `pip install -e .[dev]`.
-   → `pytest tests/` (24 tests de ambos), `ipcheck --help`, `separatio --dry-run` andando.
-4. **`.env` único** (§4) + **`feeds.opml` curado** (§2) + **importarlo a Miniflux** (está en cero)
-   y verificar por API que las 4 categorías del `PHASE_CATEGORY_MAP` tienen feeds y LATAM ≥3.
+2. ~~**Armar el monorepo**~~ **Hecho 2026-08-08**: `~/Projects/Intel/` es el repo (continúa
+   `Fennek115/separatio`; ipcheck por subtree, historia de ambos preservada), `threat intel/`
+   → `separatio/`, OPML duplicado y `Zone.Identifier` borrados, `venv/`/`output-threatintel/`
+   fuera del árbol, `feeds/feeds.opml` y `docs/` en la raíz.
+3. ~~**Packaging**~~ **Hecho 2026-08-08**: `pyproject.toml` con entry points (`separatio`,
+   `separatio-check`, `ipcheck`, `ipcheck-run`), imports de paquete (murió `IPCHECK_DIR` +
+   `sys.path.insert`), `ip_threat_checker.py` → `ipcheck/cli.py`, venv raíz editable.
+   24 tests ✓, `ipcheck --help` ✓, `separatio-check` todo verde ✓, `separatio --dry-run` ✓.
+   (Rutas por env var `INTEL_OUTPUT_DIR`: NO se hizo — queda para el deploy al LXC.)
+4. ~~**`.env` único**~~ **Hecho 2026-08-08**: VT y URLSCAN rescatadas al `.env` raíz
+   (la `ABUSECH_API_KEY` de `ipcheck/.env` estaba vencida — 403 — y se descartó; la de la
+   raíz da 200), `ipcheck/.env` borrado, `.env.example` completo commiteado, `cli.py` carga
+   el `.env` raíz. **VirusTotal quedó activo** en el enricher `ip_reputation` (key verificada,
+   HTTP 200). La parte de feeds ya estaba resuelta el 2026-08-08 por la mañana (§2).
 5. **Usuario:** `ANTHROPIC_API_KEY` en `.env`. Luego Paso 6 de F0:
    `setup_check` → `--dry-run` → `--limit 5` → corrida completa.
 6. **Recién entonces** (decisiones diferidas de Motherbase): dónde corre — CT nuevo en
