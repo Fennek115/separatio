@@ -131,7 +131,14 @@ REPORT_LANGUAGE = "español"
 # ─────────────────────────────────────────────
 # TIMEOUTS Y REINTENTOS
 # ─────────────────────────────────────────────
-HTTP_TIMEOUT    = 15   # segundos para web scraping
+HTTP_TIMEOUT    = 15   # segundos para web scraping (por operación de socket)
+
+# Tope TOTAL de reloj por fetch de artículo (Stage 1). HTTP_TIMEOUT no acota el
+# tiempo total: un servidor que gotea bytes o un Retry-After grande (urllib3 lo
+# respeta durmiendo) pueden colgar el run indefinidamente — visto 2026-08-08,
+# 37 min dormido. Superado el tope, el fetch se abandona y el artículo cae al
+# fallback del feed/título.
+FETCH_HARD_TIMEOUT = 45
 
 # Etapa 2: qwen3.5:4b sin thinking — ~2 min por artículo en i7-10510U
 SUMMARY_TIMEOUT = 240

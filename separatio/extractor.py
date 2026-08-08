@@ -4,6 +4,7 @@ Usa trafilatura como motor principal con fallback a BeautifulSoup.
 """
 
 import logging
+import threading
 import time
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -38,16 +39,40 @@ def clean_html_content(html: str) -> str:
 
 
 def fetch_url_content(url: str, timeout: int = 15,
-                      blocked_domains: set | None = None) -> str:
+                      blocked_domains: set | None = None,
+                      hard_timeout: int | None = None) -> str:
     """
     Descarga una URL y extrae el contenido principal con trafilatura.
     Retorna texto limpio o cadena vacía si falla o el dominio está bloqueado.
+
+    `hard_timeout` es un tope TOTAL de reloj para el fetch (default: timeout*3).
+    Ni el timeout de requests ni el de trafilatura acotan el tiempo total: un
+    servidor que gotea bytes, o un Retry-After grande que urllib3 respeta
+    durmiendo, pueden colgar el proceso indefinidamente (visto 2026-08-08:
+    37 min dormido en un sleep). El fetch corre en un thread daemon que se
+    abandona si excede el tope — el artículo cae al fallback del feed/título.
     """
     if not url:
         return ""
     if blocked_domains and _domain(url) in blocked_domains:
         logger.debug(f"[skip-blocked] {_domain(url)}")
         return ""
+
+    hard = hard_timeout if hard_timeout else timeout * 3
+    box: list[str] = []
+    worker = threading.Thread(
+        target=lambda: box.append(_fetch_url_content_inner(url, timeout)),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(hard)
+    if worker.is_alive():
+        logger.warning(f"[hard-timeout] Fetch de {url} superó {hard}s — se abandona")
+        return ""
+    return box[0] if box else ""
+
+
+def _fetch_url_content_inner(url: str, timeout: int) -> str:
     try:
         # trafilatura puede hacer el fetch internamente
         downloaded = trafilatura.fetch_url(url)
@@ -80,7 +105,8 @@ def fetch_url_content(url: str, timeout: int = 15,
 
 def extract_article_text(article, timeout: int = 15,
                           min_length: int = 200,
-                          blocked_domains: set | None = None) -> str:
+                          blocked_domains: set | None = None,
+                          hard_timeout: int | None = None) -> str:
     """
     Estrategia de extracción en 3 pasos:
       1. Usar contenido del feed si es suficientemente completo
@@ -98,7 +124,8 @@ def extract_article_text(article, timeout: int = 15,
     logger.debug(f"[fetch] {article.url[:80]}")
     time.sleep(0.5)   # pequeña pausa para no sobrecargar servidores
     fetched = fetch_url_content(article.url, timeout=timeout,
-                                blocked_domains=blocked_domains)
+                                blocked_domains=blocked_domains,
+                                hard_timeout=hard_timeout)
     if len(fetched) >= min_length:
         return fetched
 

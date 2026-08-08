@@ -359,6 +359,7 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
             timeout=config.HTTP_TIMEOUT,
             min_length=config.MIN_CONTENT_LENGTH,
             blocked_domains=config.NO_SCRAPE_DOMAINS,
+            hard_timeout=getattr(config, "FETCH_HARD_TIMEOUT", 45),
         )
         text = truncate_text(text, max_tokens_approx=config.ARTICLE_MAX_TOKENS)
         processed.append({
