@@ -1,5 +1,7 @@
-# Generated reports and cache
+# Generated reports, cache and run data
 reports/
+output/
+data/
 
 # Logs
 *.log
@@ -23,7 +25,7 @@ output-threatintel/
 .vscode/
 .idea/
 
-# Secrets (el .env real vive en ~/Projects/Intel/.env, fuera del repo)
+# Secrets (el .env real vive en la raíz del monorepo, gitignored)
 .env
 
 # Claude Code local
