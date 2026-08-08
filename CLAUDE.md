@@ -22,11 +22,12 @@ si se archiva.
 | Qué | Detalle |
 |---|---|
 | `pyproject.toml` | Paquetes `separatio` (+`separatio.enrichers`) e `ipcheck`. Entry points: `separatio`, `separatio-check`, `ipcheck`, `ipcheck-run`. Venv en `./venv/` (raíz) con `pip install -e '.[dev]'` |
-| `separatio/` | El pipeline (4 etapas + enriquecimiento). Detalle técnico y estado fino en su `CLAUDE.md` |
+| `separatio/` | El pipeline (4 etapas + enriquecimiento). Detalle técnico y estado fino en su `CLAUDE.md`. Enrichers (F2, 2026-08-08): IPsum, OpenPhish, ipcheck, **Ransomware.live** (1 llamada/run, sin reintentos ante 429 — ToS; nunca guardar `screenshot`/`claim_url`) y **onion-lookup** (CIRCL, solo si hay `.onion` entre los IOCs) |
 | `ipcheck/` | Librería (`ip_enricher.py`) + CLI de reputación de IPs. Su `CLAUDE.md` tiene el detalle. El enricher `ip_reputation` la importa como paquete (`from ipcheck import ip_enricher`) — `IPCHECK_DIR` y el `sys.path.insert` murieron |
 | `tests/` | Los 24 tests de ambos paquetes: `venv/bin/pytest tests/ -q` (sin red) |
 | `.env` | **EL ÚNICO** — 12 variables, gitignored (el repo es público). Espejo documentado en `.env.example` (commiteado). Lo cargan solo los entry points; las librerías leen `os.environ`. ⚠️ `ANTHROPIC_API_KEY` es **temporal** (puesta 2026-08-08, caduca en días) — reemplazar por la definitiva |
 | `feeds/feeds.opml` | Espejo curado de Miniflux (CT 112, `192.168.1.7:8080`): 40 feeds, 0 errores, bajo el usuario `threat_intel` (id 12, **no** `admin`), LATAM con 6. Verificado por API 2026-08-08 |
+| `.mcp.json` | MCP de investigación manual (F2): HIBP hosted + AbuseIPDB por `uvx` (la key sale del `.env` al lanzar; nada secreto commiteado). Solo para sesiones en esta carpeta — **nunca** en el cron |
 | `docs/` | `PLAN-REORDEN.md` (el plan del reorden, fases 1–4 hechas), `CAPAS-Y-FUENTES.md` (diseño de capas y fuentes nuevas, incl. idea OCR/AIOCRIOC), `IMPROVEMENTS.md` (backlog de refactors de Separatio) |
 | `separatio/reports/` | Salidas (gitignored): `YYYY-MM-DD/{reports,iocs}`, `history.json`, `pipeline.log`. Los `--dry-run` van aislados a `reports/dryrun/` |
 
