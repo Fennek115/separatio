@@ -21,7 +21,7 @@ consumir APIs livianas cuando hacen falta.** Cuatro capas con roles distintos:
 | **1. Noticias / análisis** | Blogs, medios, reportes APT en prosa | RSS → Miniflux (CT 112) → Separatio Stage 1–4 | Ya funciona |
 | **2. IOCs accionables** | Indicadores crudos (IPs, hashes, URLs maliciosas) para **cruzar**, no para leer | Enrichers de Separatio (Stage 2.7) + correlación | Parcial (IPsum/OpenPhish ya) |
 | **3. Enriquecimiento bajo demanda** | Scoring/contexto puntual sobre un IOC o campaña | API/SDK llamada desde el pipeline cuando la necesita | Por construir |
-| **4. Dato propio** | Lo que ataca a *tu* infra (honeypot) | Pull SSH desde casa → enricher | Por construir (F3, ligado a Oracle) |
+| **4. Dato propio** | Lo que ataca a *tu* infra (honeypot) | Pull SSH desde casa → enricher | **Construido 2026-08-08** (honeypot en Oracle VM1; `enrichers/honeypot.py` + `tools/pull_honeypot.sh`). Toggle `honeypot` OFF hasta que el pull traiga dato real — ver `Motherbase/honeypot/DEPLOY.md` |
 
 **La sinergia real:** Miniflux dice *qué está pasando*; los feeds de IOC dan *indicadores para cruzar*;
 el enriquecimiento agrega *contexto*; el honeypot valida *qué de todo eso te toca a vos*.

@@ -190,6 +190,7 @@ ENRICHERS = {
     "ip_reputation":  True,
     "ransomware_live": True,
     "onion_lookup":   True,
+    "honeypot":       False,   # F3: prender cuando el colector pull traiga datos reales
 }
 
 IPSUM_URL       = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
@@ -211,6 +212,13 @@ RANSOMWARE_MAX_VICTIMS    = 15   # tope de líneas que entran al prompt de sínt
 # onion_lookup (metadatos de .onion vía CIRCL/AIL, sin tocar Tor):
 ONIONLOOKUP_URL = "https://onion.ail-project.org/api/lookup"
 ONIONLOOKUP_MAX = 10     # tope de lookups por run (lo normal es 0 .onion/día)
+
+# honeypot (dato propio, capa 4 — F3): lo alimenta el colector pull
+# (tools/pull_honeypot.sh) que trae los atacantes del sensor de Oracle.
+# OFF hasta que el colector deposite datos reales (necesita el paso de OCI
+# Security List que abre SSH al honeypot desde casa — ver honeypot/DEPLOY.md).
+HONEYPOT_DATA      = "data/honeypot/attackers.json"
+HONEYPOT_MAX_NOTES = 10
 
 # ─────────────────────────────────────────────
 # HISTÓRICO Y TRENDING (Stage 2.6)

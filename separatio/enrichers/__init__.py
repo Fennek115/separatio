@@ -62,4 +62,12 @@ def build_enrichers(config) -> list[Enricher]:
             timeout=getattr(config, "KEV_FETCH_TIMEOUT", 15),
         ))
 
+    if toggles.get("honeypot"):
+        from separatio.enrichers.honeypot import HoneypotEnricher
+        enrichers.append(HoneypotEnricher(
+            data_path=getattr(config, "HONEYPOT_DATA",
+                              "data/honeypot/attackers.json"),
+            max_notes=getattr(config, "HONEYPOT_MAX_NOTES", 10),
+        ))
+
     return enrichers

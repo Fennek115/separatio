@@ -195,3 +195,36 @@ def test_onion_lookup_no_onions_no_calls(monkeypatch):
     ctx = EnrichmentContext()
     enr.enrich({"normal.com": ["FeedA"]}, ctx)
     assert not ctx.has_signals()
+
+
+# ── HoneypotEnricher (dato propio, capa 4) ──
+
+def _honeypot_file(tmp_path, attackers):
+    import json
+    p = tmp_path / "attackers.json"
+    p.write_text(json.dumps({"generated": "2026-08-08T09:00:00+00:00",
+                             "window_hours": 24, "attackers": attackers}))
+    return str(p)
+
+
+def test_honeypot_notes_and_strong_signal(tmp_path):
+    from separatio.enrichers.honeypot import HoneypotEnricher
+    path = _honeypot_file(tmp_path, [
+        {"ip": "45.134.26.10", "hits": 88, "kinds": ["web", "cowrie"],
+         "last_seen": "2026-08-08T08:55:00+00:00", "sample_uris": ["/.env"]},
+    ])
+    ctx = EnrichmentContext()
+    # 45.x es IOC del día → señal fuerte; 8.8.8.8 no atacó → sin verdict
+    HoneypotEnricher(data_path=path).enrich(
+        {"45.134.26.10": ["FeedX"], "8.8.8.8": ["FeedY"]}, ctx)
+    assert any("atacaron el honeypot" in t for _, t in ctx.notes)
+    strong = [v for v in ctx.verdicts if v.ioc == "45.134.26.10"]
+    assert strong and strong[0].source == "Honeypot"
+    assert not any(v.ioc == "8.8.8.8" for v in ctx.verdicts)
+
+
+def test_honeypot_missing_file_is_safe(tmp_path):
+    from separatio.enrichers.honeypot import HoneypotEnricher
+    ctx = EnrichmentContext()
+    HoneypotEnricher(data_path=str(tmp_path / "nope.json")).enrich({"1.2.3.4": ["F"]}, ctx)
+    assert not ctx.has_signals()
