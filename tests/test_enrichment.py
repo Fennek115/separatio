@@ -228,3 +228,53 @@ def test_honeypot_missing_file_is_safe(tmp_path):
     ctx = EnrichmentContext()
     HoneypotEnricher(data_path=str(tmp_path / "nope.json")).enrich({"1.2.3.4": ["F"]}, ctx)
     assert not ctx.has_signals()
+
+
+# ── MalwareBazaarEnricher (punto-5: cruce de hashes) ──
+
+def _corpus(tmp_path, shas):
+    p = tmp_path / "hashes.log"
+    p.write_text("".join(f"{s}\t2026-08-08\tvm2-services\tredis\t42\t1.2.3.4\n" for s in shas))
+    return str(p)
+
+
+def test_malwarebazaar_no_key_is_noop(tmp_path):
+    from separatio.enrichers.malwarebazaar import MalwareBazaarEnricher
+    ctx = EnrichmentContext()
+    MalwareBazaarEnricher(auth_key="", corpus_path=_corpus(tmp_path, [])).enrich(
+        {"a" * 64: ["F"]}, ctx)
+    assert not ctx.has_signals()
+
+
+def test_malwarebazaar_hit_in_honeypot_is_strong(tmp_path, monkeypatch):
+    from separatio.enrichers import malwarebazaar as mb
+    h = "b" * 64
+    enr = mb.MalwareBazaarEnricher(auth_key="k", corpus_path=_corpus(tmp_path, [h]))
+    monkeypatch.setattr(enr, "_lookup", lambda x: {
+        "signature": "Mirai", "file_type": "elf",
+        "first_seen": "2026-08-01 10:00:00", "tags": ["mirai", "elf"]})
+    ctx = EnrichmentContext()
+    enr.enrich({h: ["FeedX"], "1.2.3.4": ["F"]}, ctx)   # 1.2.3.4 no es hash → ignorado
+    assert any("malware conocido" in t for _, t in ctx.notes)
+    strong = [v for v in ctx.verdicts if v.ioc == h]
+    assert strong and strong[0].source == "MalwareBazaar" and "Mirai" in strong[0].label
+
+
+def test_malwarebazaar_known_but_not_in_honeypot_no_verdict(tmp_path, monkeypatch):
+    from separatio.enrichers import malwarebazaar as mb
+    h = "c" * 64
+    enr = mb.MalwareBazaarEnricher(auth_key="k", corpus_path=_corpus(tmp_path, []))
+    monkeypatch.setattr(enr, "_lookup", lambda x: {"signature": "CobaltStrike", "file_type": "exe"})
+    ctx = EnrichmentContext()
+    enr.enrich({h: ["FeedX"]}, ctx)
+    assert any("malware conocido" in t for _, t in ctx.notes)
+    assert not ctx.verdicts     # conocido pero NO pegó a tu honeypot → sin señal fuerte
+
+
+def test_malwarebazaar_unknown_hash_is_noop(tmp_path, monkeypatch):
+    from separatio.enrichers import malwarebazaar as mb
+    enr = mb.MalwareBazaarEnricher(auth_key="k", corpus_path=_corpus(tmp_path, []))
+    monkeypatch.setattr(enr, "_lookup", lambda x: None)
+    ctx = EnrichmentContext()
+    enr.enrich({"d" * 64: ["F"]}, ctx)
+    assert not ctx.has_signals()

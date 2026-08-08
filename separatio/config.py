@@ -191,6 +191,7 @@ ENRICHERS = {
     "ransomware_live": True,
     "onion_lookup":   True,
     "honeypot":       False,   # F3: prender cuando el colector pull traiga datos reales
+    "malwarebazaar":  False,   # F3/punto-5: prender con MALWAREBAZAAR_AUTH_KEY (gratis, abuse.ch)
 }
 
 IPSUM_URL       = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
@@ -219,6 +220,15 @@ ONIONLOOKUP_MAX = 10     # tope de lookups por run (lo normal es 0 .onion/día)
 # Security List que abre SSH al honeypot desde casa — ver honeypot/DEPLOY.md).
 HONEYPOT_DATA      = "data/honeypot/attackers.json"
 HONEYPOT_MAX_NOTES = 10
+
+# malwarebazaar (abuse.ch): cruza hashes del día contra MalwareBazaar y marca la
+# familia. Señal fuerte si el hash ADEMÁS está en el corpus del honeypot propio
+# (hashes.log del colector pull). API con Auth-Key (registro gratis en abuse.ch);
+# OFF hasta cargar la key en el entorno. Acotado por MALWAREBAZAAR_MAX.
+MALWAREBAZAAR_URL      = "https://mb-api.abuse.ch/api/v1/"
+MALWAREBAZAAR_AUTH_KEY = os.getenv("MALWAREBAZAAR_AUTH_KEY", "")
+MALWAREBAZAAR_CORPUS   = "data/honeypot/hashes.log"
+MALWAREBAZAAR_MAX      = 25   # tope de lookups por run (protege cuota)
 
 # ─────────────────────────────────────────────
 # HISTÓRICO Y TRENDING (Stage 2.6)
