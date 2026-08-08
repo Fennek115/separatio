@@ -17,7 +17,7 @@ Hecho:
 - `PROVIDER = "claude"` con modelos vigentes (`claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5-20251001`). Ollama quedó como legacy: **el CT 111 ya no existe**.
 - Los 3 enrichers encendidos; `IPCHECK_DIR` apunta a `~/Projects/Intel/ipcheck`.
 - Secretos en `~/Projects/Intel/.env` (fuera del repo); `pipeline.py` lo carga con `load_dotenv()` antes de `import config`. Scripts sueltos (`setup_check.py`, tests manuales) NO lo cargan solos.
-- Miniflux (CT 112, `192.168.1.7:8080`): auth por API token (`MINIFLUX_API_TOKEN` en el `.env`). **Los feeds viven bajo el usuario `threat_intel` (id 12), NO bajo `admin`** — el token del `.env` es el de ese usuario (corregido 2026-08-08; con el token de `admin` el pipeline veía 0 feeds). Categorías alineadas con `PHASE_CATEGORY_MAP`: `Cibersecurity` (58), `Hacking & Research` (59), `Threat Intel` (60), `Vulnerability` (61), `LATAM` (62). 41 feeds, 0 errores (verificado por API 2026-08-08); `../feeds.opml` es el espejo curado.
+- Miniflux (CT 112, `192.168.1.7:8080`): auth por API token (`MINIFLUX_API_TOKEN` en el `.env`). **Los feeds viven bajo el usuario `threat_intel` (id 12), NO bajo `admin`** — el token del `.env` es el de ese usuario (corregido 2026-08-08; con el token de `admin` el pipeline veía 0 feeds). Categorías alineadas con `PHASE_CATEGORY_MAP`: `Cibersecurity` (58), `Hacking & Research` (59), `Threat Intel` (60), `Vulnerability` (61), `LATAM` (62). 40 feeds, 0 errores (verificado por API 2026-08-08); `../feeds.opml` es el espejo curado (40 entradas).
 - Venv en `./venv/` con `requirements.txt` + `requirements-dev.txt` + `anthropic`. Los 14 tests pasan.
 
 Pendiente (en orden):
@@ -27,7 +27,7 @@ Pendiente (en orden):
 3. `VIRUSTOTAL_API_KEY` no está en el `.env` raíz **pero sí en `ipcheck/.env`** (que el pipeline no carga) — se rescata al unificar los `.env` (fase 4 de `../PLAN-REORDEN.md`). GreyNoise: sin clave (no acepta correos Proton).
 4. ~~Paso 6 de F0~~ **Completado 2026-08-08**: `setup_check` ✓ → `--dry-run` ✓ (120 arts,
    ruteo OK) → `--limit 5` ✓ → corrida completa ✓ (116 resúmenes, 0 fallos, ~8 min).
-   Tres fixes salieron de esa prueba (sin commitear aún):
+   Tres fixes salieron de esa prueba (commiteados y pusheados en `25a000a`):
    - `analyzer.py`: se quitó `temperature` de la rama claude (Sonnet 5/Opus 5 lo rechazan con 400).
    - `analyzer.py`: la respuesta puede empezar con bloques `thinking` (activo por defecto
      en Sonnet 5/Opus 5) — se filtran solo los bloques de texto en vez de `content[0]`.
