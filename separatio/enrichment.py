@@ -91,41 +91,66 @@ class IocVerdict:
 class EnrichmentContext:
     """Hechos de enrichment externo acumulados por los enrichers de Stage 2.7."""
     verdicts: list[IocVerdict] = field(default_factory=list)
+    # Hechos de fuentes externas NO ligados a un IOC de los artículos (p.ej.
+    # víctimas nuevas en leak sites). Van al prompt de Stage 3 pero no al
+    # export de IOCs: (fuente, línea de texto).
+    notes: list[tuple[str, str]] = field(default_factory=list)
     sources_ok: list[str] = field(default_factory=list)
     sources_failed: list[str] = field(default_factory=list)
 
     def add(self, verdict: IocVerdict) -> None:
         self.verdicts.append(verdict)
 
+    def add_note(self, source: str, text: str) -> None:
+        self.notes.append((source, text))
+
     def has_signals(self) -> bool:
-        return bool(self.verdicts)
+        return bool(self.verdicts) or bool(self.notes)
 
     def malicious_iocs(self) -> list[IocVerdict]:
         return self.verdicts
 
     def format_for_prompt(self) -> str:
         """Bloque de texto para anexar al CorrelationContext de Stage 3."""
-        if not self.verdicts:
+        if not self.verdicts and not self.notes:
             return ""
-        lines = [
-            "ENRICHMENT EXTERNO DE IOCs",
-            "(IOCs del día cruzados contra fuentes externas de reputación — hechos, no inferencias):",
-            "",
-        ]
-        # Agrupar por fuente para legibilidad
-        by_source: dict[str, list[IocVerdict]] = {}
-        for v in self.verdicts:
-            by_source.setdefault(v.source, []).append(v)
-        for source, items in by_source.items():
-            lines.append(f"  ▸ {source}:")
-            for v in items[:25]:
-                score = f" [{v.score:.0%}]" if isinstance(v.score, float) else ""
-                detail = f" — {v.detail}" if v.detail else ""
-                lines.append(f"      {v.ioc} ({v.kind}) → {v.label}{score}{detail}")
-        lines += [
-            "",
-            "REGLA: trata estos veredictos como reputación verificada de los IOCs.",
-        ]
+        lines: list[str] = []
+        if self.verdicts:
+            lines += [
+                "ENRICHMENT EXTERNO DE IOCs",
+                "(IOCs del día cruzados contra fuentes externas de reputación — hechos, no inferencias):",
+                "",
+            ]
+            # Agrupar por fuente para legibilidad
+            by_source: dict[str, list[IocVerdict]] = {}
+            for v in self.verdicts:
+                by_source.setdefault(v.source, []).append(v)
+            for source, items in by_source.items():
+                lines.append(f"  ▸ {source}:")
+                for v in items[:25]:
+                    score = f" [{v.score:.0%}]" if isinstance(v.score, float) else ""
+                    detail = f" — {v.detail}" if v.detail else ""
+                    lines.append(f"      {v.ioc} ({v.kind}) → {v.label}{score}{detail}")
+            lines += [
+                "",
+                "REGLA: trata estos veredictos como reputación verificada de los IOCs.",
+            ]
+        if self.notes:
+            if lines:
+                lines.append("")
+            lines += [
+                "ACTIVIDAD EXTERNA DEL DÍA",
+                "(hechos observados en fuentes externas, no ligados a artículos de los feeds;",
+                " si se usan en el informe, citar la fuente indicada):",
+                "",
+            ]
+            by_src: dict[str, list[str]] = {}
+            for source, text in self.notes:
+                by_src.setdefault(source, []).append(text)
+            for source, items in by_src.items():
+                lines.append(f"  ▸ Source: {source}")
+                for text in items:
+                    lines.append(f"      {text}")
         return "\n".join(lines)
 
     def export_rows(self) -> list[dict]:

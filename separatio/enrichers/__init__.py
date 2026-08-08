@@ -43,4 +43,23 @@ def build_enrichers(config) -> list[Enricher]:
             sleep_on_vt=getattr(config, "ENRICH_VT_SLEEP", 15),
         ))
 
+    if toggles.get("ransomware_live"):
+        from separatio.enrichers.ransomware import RansomwareLiveEnricher
+        enrichers.append(RansomwareLiveEnricher(
+            url=getattr(config, "RANSOMWARELIVE_URL",
+                        "https://api.ransomware.live/v2/recentvictims"),
+            lookback_hours=getattr(config, "RANSOMWARE_LOOKBACK_HOURS", 26),
+            max_victims=getattr(config, "RANSOMWARE_MAX_VICTIMS", 15),
+            timeout=getattr(config, "KEV_FETCH_TIMEOUT", 15),
+        ))
+
+    if toggles.get("onion_lookup"):
+        from separatio.enrichers.onionlookup import OnionLookupEnricher
+        enrichers.append(OnionLookupEnricher(
+            base_url=getattr(config, "ONIONLOOKUP_URL",
+                             "https://onion.ail-project.org/api/lookup"),
+            max_lookups=getattr(config, "ONIONLOOKUP_MAX", 10),
+            timeout=getattr(config, "KEV_FETCH_TIMEOUT", 15),
+        ))
+
     return enrichers

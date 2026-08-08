@@ -185,9 +185,11 @@ ENRICHMENT_ENABLED = True
 #                       en el entorno y respeta el rate-limit de VirusTotal:
 #                       ~15s por IP que llega a Nivel 3 → lento). Off por defecto.
 ENRICHERS = {
-    "ipsum":         True,
-    "openphish":     True,
-    "ip_reputation": True,
+    "ipsum":          True,
+    "openphish":      True,
+    "ip_reputation":  True,
+    "ransomware_live": True,
+    "onion_lookup":   True,
 }
 
 IPSUM_URL       = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
@@ -197,6 +199,18 @@ OPENPHISH_URL   = "https://openphish.com/feed.txt"
 # ip_reputation (librería ipcheck, paquete del monorepo):
 ENRICH_MAX_IPS  = 25     # tope de IPs consultadas por API (protege cuota)
 ENRICH_VT_SLEEP = 15     # segundos entre IPs que alcanzan Nivel 3 (rate-limit VT)
+
+# ransomware_live (leak sites vía Ransomware.live, clearnet — F2 del proyecto):
+# UNA llamada por run; el free tier es 1 req/min por endpoint y sus ToS prohíben
+# evadirlo con reintentos. Datos con atribución obligatoria ("Source:
+# Ransomware.live") y sin uso comercial. Nunca guardar screenshot/claim_url.
+RANSOMWARELIVE_URL        = "https://api.ransomware.live/v2/recentvictims"
+RANSOMWARE_LOOKBACK_HOURS = 26   # ventana de "víctimas nuevas" (margen sobre 24h)
+RANSOMWARE_MAX_VICTIMS    = 15   # tope de líneas que entran al prompt de síntesis
+
+# onion_lookup (metadatos de .onion vía CIRCL/AIL, sin tocar Tor):
+ONIONLOOKUP_URL = "https://onion.ail-project.org/api/lookup"
+ONIONLOOKUP_MAX = 10     # tope de lookups por run (lo normal es 0 .onion/día)
 
 # ─────────────────────────────────────────────
 # HISTÓRICO Y TRENDING (Stage 2.6)

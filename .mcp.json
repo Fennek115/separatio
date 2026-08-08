@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "hibp": {
+      "type": "http",
+      "url": "https://haveibeenpwned.com/mcp"
+    },
+    "abuseipdb": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "set -a; . ./.env 2>/dev/null; set +a; exec uvx mcp-server-abuseipdb"
+      ]
+    }
+  }
+}

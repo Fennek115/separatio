@@ -74,3 +74,124 @@ def test_run_enrichment_isolates_failures():
 def test_run_enrichment_no_iocs():
     ctx = run_enrichment([_summary(1, "FeedA", [])], [])
     assert not ctx.has_signals()
+
+
+# ── Notas de contexto (actividad externa no ligada a IOCs) ──
+
+def test_notes_in_prompt_but_not_in_export():
+    ctx = EnrichmentContext()
+    ctx.add_note("Ransomware.live", "lockbit publicó víctima: ACME (US, Retail)")
+    assert ctx.has_signals()
+    block = ctx.format_for_prompt()
+    assert "ACTIVIDAD EXTERNA" in block
+    assert "Source: Ransomware.live" in block
+    assert "ACME" in block
+    assert ctx.export_rows() == []         # las notas no contaminan el CSV de IOCs
+
+
+def test_notes_and_verdicts_coexist():
+    ctx = EnrichmentContext()
+    ctx.add(IocVerdict(ioc="1.2.3.4", kind="ip", source="IPsum", label="mala"))
+    ctx.add_note("Ransomware.live", "akira publicó víctima: X (DE, Legal)")
+    block = ctx.format_for_prompt()
+    assert "ENRICHMENT EXTERNO" in block and "ACTIVIDAD EXTERNA" in block
+
+
+# ── RansomwareLiveEnricher ──
+
+def _victim(**over):
+    base = {
+        "victim": "ACME Corp", "group": "lockbit",
+        "discovered": "2099-01-01T12:00:00+00:00",
+        "attackdate": "2099-01-01T10:00:00+00:00",
+        "country": "US", "activity": "Retail", "domain": "acme.com",
+    }
+    base.update(over)
+    return base
+
+
+def test_ransomware_live_notes_and_crossmatch(monkeypatch):
+    from separatio.enrichers.ransomware import RansomwareLiveEnricher
+    enr = RansomwareLiveEnricher(url="http://test.invalid", lookback_hours=26)
+    monkeypatch.setattr(enr, "_fetch", lambda: [
+        _victim(),
+        _victim(victim="Vieja SA", domain="vieja.com",
+                discovered="2000-01-01T00:00:00+00:00"),   # fuera de ventana
+    ])
+    ctx = EnrichmentContext()
+    enr.enrich({"acme.com": ["FeedA"], "otro.com": ["FeedB"]}, ctx)
+    # Nota solo de la víctima reciente
+    notes = [t for _, t in ctx.notes]
+    assert any("ACME Corp" in n for n in notes)
+    assert not any("Vieja SA" in n for n in notes)
+    # Cruce: acme.com estaba entre los IOCs del día (aunque la publicación sea
+    # vieja, el dominio matchea contra todo el feed)
+    assert any(v.ioc == "acme.com" and v.source == "Ransomware.live"
+               for v in ctx.verdicts)
+    assert not any(v.ioc == "otro.com" for v in ctx.verdicts)
+
+
+def test_ransomware_live_discards_sensitive_fields(monkeypatch):
+    """GDPR/ToS: screenshot, claim_url e infostealer no sobreviven al parseo."""
+    from separatio.enrichers import ransomware as rw
+
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return [_victim(screenshot="https://x/cap.png",
+                            claim_url="http://leak.onion/x",
+                            infostealer={"employees": 3})]
+
+    monkeypatch.setattr(rw.requests, "get", lambda *a, **k: FakeResp())
+    enr = rw.RansomwareLiveEnricher(url="http://test.invalid")
+    data = enr._fetch()
+    assert "screenshot" not in data[0]
+    assert "claim_url" not in data[0]
+    assert "infostealer" not in data[0]
+    assert data[0]["victim"] == "ACME Corp"
+
+
+def test_ransomware_live_caps_notes(monkeypatch):
+    from separatio.enrichers.ransomware import RansomwareLiveEnricher
+    enr = RansomwareLiveEnricher(url="http://test.invalid", max_victims=3)
+    monkeypatch.setattr(enr, "_fetch", lambda: [
+        _victim(victim=f"V{i}", domain=f"v{i}.com") for i in range(10)
+    ])
+    ctx = EnrichmentContext()
+    enr.enrich({}, ctx)
+    assert len(ctx.notes) == 4             # 3 víctimas + línea "(+7 más…)"
+    assert "+7" in ctx.notes[-1][1]
+
+
+# ── OnionLookupEnricher ──
+
+def test_onion_lookup_only_queries_onions(monkeypatch):
+    from separatio.enrichers import onionlookup as ol
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"id": "abc.onion", "first_seen": "2026-01-01",
+                    "last_seen": "2026-07-01", "titles": ["Evil Blog"]}
+
+    monkeypatch.setattr(ol, "get_with_retry",
+                        lambda url, **k: calls.append(url) or FakeResp())
+    enr = ol.OnionLookupEnricher(base_url="http://test.invalid/api/lookup")
+    ctx = EnrichmentContext()
+    enr.enrich({"abc.onion": ["FeedA"], "normal.com": ["FeedB"]}, ctx)
+    assert calls == ["http://test.invalid/api/lookup/abc.onion"]
+    assert len(ctx.verdicts) == 1
+    v = ctx.verdicts[0]
+    assert v.ioc == "abc.onion" and "Evil Blog" in v.detail
+
+
+def test_onion_lookup_no_onions_no_calls(monkeypatch):
+    from separatio.enrichers import onionlookup as ol
+    monkeypatch.setattr(ol, "get_with_retry",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debía llamar")))
+    enr = ol.OnionLookupEnricher(base_url="http://test.invalid")
+    ctx = EnrichmentContext()
+    enr.enrich({"normal.com": ["FeedA"]}, ctx)
+    assert not ctx.has_signals()
