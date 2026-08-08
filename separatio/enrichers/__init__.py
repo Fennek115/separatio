@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from enrichment import Enricher
+from separatio.enrichment import Enricher
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def build_enrichers(config) -> list[Enricher]:
     enrichers: list[Enricher] = []
 
     if toggles.get("ipsum"):
-        from enrichers.ipsum import IpsumEnricher
+        from separatio.enrichers.ipsum import IpsumEnricher
         enrichers.append(IpsumEnricher(
             url=getattr(config, "IPSUM_URL",
                         "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"),
@@ -30,16 +30,15 @@ def build_enrichers(config) -> list[Enricher]:
         ))
 
     if toggles.get("openphish"):
-        from enrichers.openphish import OpenPhishEnricher
+        from separatio.enrichers.openphish import OpenPhishEnricher
         enrichers.append(OpenPhishEnricher(
             url=getattr(config, "OPENPHISH_URL", "https://openphish.com/feed.txt"),
             timeout=getattr(config, "KEV_FETCH_TIMEOUT", 15),
         ))
 
     if toggles.get("ip_reputation"):
-        from enrichers.ip_reputation import IpReputationEnricher
+        from separatio.enrichers.ip_reputation import IpReputationEnricher
         enrichers.append(IpReputationEnricher(
-            ipcheck_dir=getattr(config, "IPCHECK_DIR", ""),
             max_ips=getattr(config, "ENRICH_MAX_IPS", 25),
             sleep_on_vt=getattr(config, "ENRICH_VT_SLEEP", 15),
         ))

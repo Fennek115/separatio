@@ -23,20 +23,20 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# El .env vive en ~/Projects/Intel/.env (un nivel arriba del repo). Se carga acá,
+# El .env vive en la raíz del monorepo (un nivel arriba del paquete). Se carga acá,
 # en el entrypoint y antes de importar config —no en config.py— para que
 # os.getenv() ya vea las claves sin efectos en tiempo de import.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-import config
-from miniflux_client import MinifluxClient
-from extractor import extract_article_text, truncate_text
-from analyzer import (ArticleSummary, summarize_article, generate_report,
+from separatio import config
+from separatio.miniflux_client import MinifluxClient
+from separatio.extractor import extract_article_text, truncate_text
+from separatio.analyzer import (ArticleSummary, summarize_article, generate_report,
                       generate_weekly_report, generate_phase_report,
                       generate_synthesis_report, unload_model)
-from correlator import build_correlation_context, CorrelationContext
-from history import load_history, append_daily_record, save_history, build_trending_context, TrendingContext
-from reporter import save_report
+from separatio.correlator import build_correlation_context, CorrelationContext
+from separatio.history import load_history, append_daily_record, save_history, build_trending_context, TrendingContext
+from separatio.reporter import save_report
 
 Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -503,8 +503,8 @@ def stage27_enrich(
     logger.info("ETAPA 2.7: Enrichment externo de IOCs")
     logger.info("═" * 50)
     try:
-        from enrichers import build_enrichers
-        from enrichment import run_enrichment
+        from separatio.enrichers import build_enrichers
+        from separatio.enrichment import run_enrichment
 
         enrichers = build_enrichers(config)
         if not enrichers:

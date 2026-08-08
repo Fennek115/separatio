@@ -5,6 +5,13 @@ Ejecutar antes de usar el pipeline por primera vez.
 """
 
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Mismo contrato que pipeline.py: el .env vive en la raíz del monorepo y se
+# carga en el entry point, antes de importar config.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 def check(label: str, ok: bool, detail: str = "") -> bool:
@@ -37,7 +44,7 @@ def main():
 
     # Provider
     try:
-        import config
+        from separatio import config
         provider = getattr(config, "PROVIDER", "ollama")
     except ImportError:
         all_ok &= check("config.py", False, "archivo no encontrado")

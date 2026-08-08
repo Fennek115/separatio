@@ -7,7 +7,7 @@ import requests
 import logging
 from dataclasses import dataclass
 
-from net import request_with_retry
+from separatio.net import request_with_retry
 
 logger = logging.getLogger(__name__)
 

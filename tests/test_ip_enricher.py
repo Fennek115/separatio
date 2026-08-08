@@ -1,7 +1,7 @@
 """Tests de la librería ip_enricher — lógica pura + cascada por niveles sin red."""
 
-import ip_enricher as ie
-from ip_enricher import ApiKeys, IpEnricher
+from ipcheck import ip_enricher as ie
+from ipcheck.ip_enricher import ApiKeys, IpEnricher
 
 
 # ── Claves ────────────────────────────────────────────────

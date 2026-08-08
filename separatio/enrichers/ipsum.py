@@ -13,7 +13,7 @@ import logging
 
 import requests
 
-from enrichment import Enricher, EnrichmentContext, IocVerdict, ioc_kind
+from separatio.enrichment import Enricher, EnrichmentContext, IocVerdict, ioc_kind
 
 logger = logging.getLogger(__name__)
 

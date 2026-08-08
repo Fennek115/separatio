@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from analyzer import ArticleSummary
+    from separatio.analyzer import ArticleSummary
 
 logger = logging.getLogger(__name__)
 

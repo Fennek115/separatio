@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intel"
+version = "0.1.0"
+description = "Central de threat intel: pipeline Separatio + librería ipcheck"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    # separatio
+    "trafilatura>=1.9.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "anthropic>=0.40.0",
+    "ollama>=0.3.0",        # legacy (PROVIDER = "ollama")
+    "weasyprint>=62.0",     # export PDF; necesita pango/gdk-pixbuf del sistema
+    # ipcheck
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+separatio = "separatio.pipeline:main"
+separatio-check = "separatio.setup_check:main"
+ipcheck = "ipcheck.cli:main"
+ipcheck-run = "ipcheck.run:main"
+
+[tool.setuptools]
+packages = ["separatio", "separatio.enrichers", "ipcheck"]

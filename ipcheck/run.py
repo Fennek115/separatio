@@ -21,8 +21,6 @@ BOLD   = "\033[1m"
 OUTPUT_DEFAULT    = "ips_publicas_output.txt"
 HISTORIAL_DEFAULT = "ip_procesadas.txt"
 
-DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 def contar_ips_output(path):
     """Cuenta las IPs reales en el output (excluye líneas de comentario)."""
@@ -92,8 +90,7 @@ def main():
     separador("PASO 1/2 — PROCESAMIENTO DEL EXCEL")
 
     cmd_procesar = [
-        sys.executable,
-        os.path.join(DIR, "procesar_excel.py"),
+        sys.executable, "-m", "ipcheck.procesar_excel",
         args.archivo,
         "--historial",   args.historial,
         "--output",      args.output,
@@ -118,15 +115,14 @@ def main():
         print(f"\n{YELLOW}[--solo-procesar] Consulta de APIs omitida.{RESET}")
         print(f"{GREEN}[✓] {n_ips} IPs listas en: {args.output}{RESET}")
         print(f"\n    Para continuar manualmente:")
-        print(f"    python3 ip_threat_checker.py {args.output} --historial {args.historial}\n")
+        print(f"    ipcheck {args.output} --historial {args.historial}\n")
         sys.exit(0)
 
     # ── PASO 2: ip_threat_checker.py ──────────────────────────
     separador(f"PASO 2/2 — CONSULTA DE APIs ({n_ips} IPs nuevas)")
 
     cmd_checker = [
-        sys.executable,
-        os.path.join(DIR, "ip_threat_checker.py"),
+        sys.executable, "-m", "ipcheck.cli",
         args.output,
         "--historial", args.historial,
         "--excel",     args.excel,

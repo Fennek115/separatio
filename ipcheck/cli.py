@@ -15,7 +15,7 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 
-import ip_enricher
+from ipcheck import ip_enricher
 
 load_dotenv()
 

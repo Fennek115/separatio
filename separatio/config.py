@@ -187,8 +187,7 @@ IPSUM_URL       = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum
 IPSUM_MIN_SCORE = 3      # nº mínimo de listas públicas que reportan la IP
 OPENPHISH_URL   = "https://openphish.com/feed.txt"
 
-# ip_reputation (librería ipcheck):
-IPCHECK_DIR     = "/home/dust/Projects/Intel/ipcheck"  # ruta al repo ipcheck
+# ip_reputation (librería ipcheck, paquete del monorepo):
 ENRICH_MAX_IPS  = 25     # tope de IPs consultadas por API (protege cuota)
 ENRICH_VT_SLEEP = 15     # segundos entre IPs que alcanzan Nivel 3 (rate-limit VT)
 

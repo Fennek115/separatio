@@ -1,7 +1,7 @@
 """Tests de la capa de enrichment (Stage 2.7) — deterministas, sin red."""
 
-from analyzer import ArticleSummary
-from enrichment import (
+from separatio.analyzer import ArticleSummary
+from separatio.enrichment import (
     Enricher, EnrichmentContext, IocVerdict,
     collect_iocs, ioc_kind, normalize_ioc, run_enrichment,
 )

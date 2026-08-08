@@ -9,18 +9,15 @@ A diferencia de los enrichers de feed plano, este consume cuota de API y respeta
 el rate-limit de VirusTotal (sleep entre IPs que alcanzan Nivel 3), por lo que
 está OFF por defecto y limitado por `max_ips`.
 
-Importa ipcheck por ruta (config.IPCHECK_DIR) en vez de como paquete instalado,
-para mantener bajo acoplamiento entre los dos repos locales.
+Importa ipcheck como paquete del monorepo (`ipcheck.ip_enricher`).
 """
 
 from __future__ import annotations
 
 import logging
-import sys
 import time
-from pathlib import Path
 
-from enrichment import Enricher, EnrichmentContext, IocVerdict, ioc_kind
+from separatio.enrichment import Enricher, EnrichmentContext, IocVerdict, ioc_kind
 
 logger = logging.getLogger(__name__)
 
@@ -34,22 +31,13 @@ _RISK_LABELS = {
 class IpReputationEnricher(Enricher):
     name = "ipcheck"
 
-    def __init__(self, ipcheck_dir: str, max_ips: int = 25, sleep_on_vt: int = 15):
-        self.ipcheck_dir = ipcheck_dir
+    def __init__(self, max_ips: int = 25, sleep_on_vt: int = 15):
         self.max_ips = max_ips
         self.sleep_on_vt = sleep_on_vt
 
     def _load_lib(self):
-        """Importa ip_enricher desde el repo ipcheck (por ruta)."""
-        d = Path(self.ipcheck_dir).expanduser().resolve()
-        if not (d / "ip_enricher.py").exists():
-            raise FileNotFoundError(
-                f"ipcheck/ip_enricher.py no encontrado en {d}. "
-                f"Configura IPCHECK_DIR en config.py."
-            )
-        if str(d) not in sys.path:
-            sys.path.insert(0, str(d))
-        import ip_enricher  # noqa: E402
+        """Import diferido para que el enricher pueda construirse sin la librería."""
+        from ipcheck import ip_enricher
         return ip_enricher
 
     def enrich(self, iocs: dict[str, list[str]], ctx: EnrichmentContext) -> None:

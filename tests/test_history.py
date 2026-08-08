@@ -2,7 +2,7 @@
 
 import json
 
-import history
+from separatio import history
 
 
 def test_atomic_save_roundtrip(tmp_path):

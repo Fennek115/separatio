@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from analyzer import ArticleSummary
-    from correlator import CorrelationContext
+    from separatio.analyzer import ArticleSummary
+    from separatio.correlator import CorrelationContext
 
 logger = logging.getLogger(__name__)
 

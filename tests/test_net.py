@@ -3,7 +3,7 @@
 import pytest
 import requests
 
-import net
+from separatio import net
 
 
 class _FakeResp:

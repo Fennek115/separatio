@@ -254,7 +254,7 @@ def _build_options(num_ctx: int, num_predict: int,
 
 
 def _get_api_key(provider: str) -> str:
-    import config
+    from separatio import config
     keys = {
         "claude": getattr(config, "ANTHROPIC_API_KEY", ""),
         "openai": getattr(config, "OPENAI_API_KEY", ""),

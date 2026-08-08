@@ -17,12 +17,12 @@ import re
 import requests
 from collections import defaultdict
 
-from net import get_with_retry
+from separatio.net import get_with_retry
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from analyzer import ArticleSummary
+    from separatio.analyzer import ArticleSummary
 
 logger = logging.getLogger(__name__)
 
