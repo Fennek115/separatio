@@ -191,7 +191,7 @@ ENRICHERS = {
     "ransomware_live": True,
     "onion_lookup":   True,
     "honeypot":       False,   # F3: prender cuando el colector pull traiga datos reales
-    "malwarebazaar":  False,   # F3/punto-5: prender con MALWAREBAZAAR_AUTH_KEY (gratis, abuse.ch)
+    "malwarebazaar":  True,    # punto-5: ON (usa ABUSECH_API_KEY del .env; no-op si falta)
 }
 
 IPSUM_URL       = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
@@ -223,12 +223,17 @@ HONEYPOT_MAX_NOTES = 10
 
 # malwarebazaar (abuse.ch): cruza hashes del día contra MalwareBazaar y marca la
 # familia. Señal fuerte si el hash ADEMÁS está en el corpus del honeypot propio
-# (hashes.log del colector pull). API con Auth-Key (registro gratis en abuse.ch);
-# OFF hasta cargar la key en el entorno. Acotado por MALWAREBAZAAR_MAX.
-MALWAREBAZAAR_URL      = "https://mb-api.abuse.ch/api/v1/"
-MALWAREBAZAAR_AUTH_KEY = os.getenv("MALWAREBAZAAR_AUTH_KEY", "")
-MALWAREBAZAAR_CORPUS   = "data/honeypot/hashes.log"
-MALWAREBAZAAR_MAX      = 25   # tope de lookups por run (protege cuota)
+# (hashes.log del colector pull). Auth-Key UNIFICADA de abuse.ch (la misma que usa
+# ipcheck para ThreatFox/URLhaus). Lista con FAILOVER: primaria ABUSECH_API_KEY,
+# secundaria ABUSECH_API_KEY_2 (se usa si la primaria da 403 o rate-limit).
+MALWAREBAZAAR_URL       = "https://mb-api.abuse.ch/api/v1/"
+MALWAREBAZAAR_AUTH_KEYS = [k for k in (
+    os.getenv("ABUSECH_API_KEY"),
+    os.getenv("ABUSECH_API_KEY_2"),
+    os.getenv("MALWAREBAZAAR_AUTH_KEY"),
+) if k]
+MALWAREBAZAAR_CORPUS    = "data/honeypot/hashes.log"
+MALWAREBAZAAR_MAX       = 25   # tope de lookups por run (protege cuota)
 
 # ─────────────────────────────────────────────
 # HISTÓRICO Y TRENDING (Stage 2.6)

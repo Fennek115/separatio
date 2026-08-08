@@ -241,7 +241,7 @@ def _corpus(tmp_path, shas):
 def test_malwarebazaar_no_key_is_noop(tmp_path):
     from separatio.enrichers.malwarebazaar import MalwareBazaarEnricher
     ctx = EnrichmentContext()
-    MalwareBazaarEnricher(auth_key="", corpus_path=_corpus(tmp_path, [])).enrich(
+    MalwareBazaarEnricher(auth_keys=[], corpus_path=_corpus(tmp_path, [])).enrich(
         {"a" * 64: ["F"]}, ctx)
     assert not ctx.has_signals()
 
@@ -249,7 +249,7 @@ def test_malwarebazaar_no_key_is_noop(tmp_path):
 def test_malwarebazaar_hit_in_honeypot_is_strong(tmp_path, monkeypatch):
     from separatio.enrichers import malwarebazaar as mb
     h = "b" * 64
-    enr = mb.MalwareBazaarEnricher(auth_key="k", corpus_path=_corpus(tmp_path, [h]))
+    enr = mb.MalwareBazaarEnricher(auth_keys=["k"], corpus_path=_corpus(tmp_path, [h]))
     monkeypatch.setattr(enr, "_lookup", lambda x: {
         "signature": "Mirai", "file_type": "elf",
         "first_seen": "2026-08-01 10:00:00", "tags": ["mirai", "elf"]})
@@ -263,7 +263,7 @@ def test_malwarebazaar_hit_in_honeypot_is_strong(tmp_path, monkeypatch):
 def test_malwarebazaar_known_but_not_in_honeypot_no_verdict(tmp_path, monkeypatch):
     from separatio.enrichers import malwarebazaar as mb
     h = "c" * 64
-    enr = mb.MalwareBazaarEnricher(auth_key="k", corpus_path=_corpus(tmp_path, []))
+    enr = mb.MalwareBazaarEnricher(auth_keys=["k"], corpus_path=_corpus(tmp_path, []))
     monkeypatch.setattr(enr, "_lookup", lambda x: {"signature": "CobaltStrike", "file_type": "exe"})
     ctx = EnrichmentContext()
     enr.enrich({h: ["FeedX"]}, ctx)
@@ -273,8 +273,35 @@ def test_malwarebazaar_known_but_not_in_honeypot_no_verdict(tmp_path, monkeypatc
 
 def test_malwarebazaar_unknown_hash_is_noop(tmp_path, monkeypatch):
     from separatio.enrichers import malwarebazaar as mb
-    enr = mb.MalwareBazaarEnricher(auth_key="k", corpus_path=_corpus(tmp_path, []))
+    enr = mb.MalwareBazaarEnricher(auth_keys=["k"], corpus_path=_corpus(tmp_path, []))
     monkeypatch.setattr(enr, "_lookup", lambda x: None)
     ctx = EnrichmentContext()
     enr.enrich({"d" * 64: ["F"]}, ctx)
     assert not ctx.has_signals()
+
+
+def test_malwarebazaar_failover_to_secondary(tmp_path, monkeypatch):
+    """La primaria da 403 → usa la secundaria y resuelve."""
+    from separatio.enrichers import malwarebazaar as mb
+    h = "e" * 64
+    calls = []
+
+    class _Resp:
+        def __init__(self, code, payload):
+            self.status_code, self._p = code, payload
+        def json(self):
+            return self._p
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        calls.append(headers["Auth-Key"])
+        if headers["Auth-Key"] == "bad":
+            return _Resp(403, {})
+        return _Resp(200, {"query_status": "ok",
+                           "data": [{"signature": "Gafgyt", "file_type": "elf"}]})
+
+    monkeypatch.setattr(mb.requests, "post", fake_post)
+    enr = mb.MalwareBazaarEnricher(auth_keys=["bad", "good"], corpus_path=_corpus(tmp_path, [h]))
+    ctx = EnrichmentContext()
+    enr.enrich({h: ["F"]}, ctx)
+    assert calls == ["bad", "good"]         # probó la primaria, cayó a la secundaria
+    assert any(v.ioc == h for v in ctx.verdicts)

@@ -73,7 +73,7 @@ def build_enrichers(config) -> list[Enricher]:
     if toggles.get("malwarebazaar"):
         from separatio.enrichers.malwarebazaar import MalwareBazaarEnricher
         enrichers.append(MalwareBazaarEnricher(
-            auth_key=getattr(config, "MALWAREBAZAAR_AUTH_KEY", ""),
+            auth_keys=getattr(config, "MALWAREBAZAAR_AUTH_KEYS", []),
             corpus_path=getattr(config, "MALWAREBAZAAR_CORPUS",
                                 "data/honeypot/hashes.log"),
             max_lookups=getattr(config, "MALWAREBAZAAR_MAX", 25),
