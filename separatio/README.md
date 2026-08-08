@@ -151,26 +151,29 @@ Miniflux RSS (unread articles, sorted by published_at desc)
 
 ### 1. Clone and set up the environment
 
+Separatio is a package inside the monorepo (see the root `README.md`); the
+install is done once at the repo root and covers both packages:
+
 ```bash
-git clone https://github.com/Fennek115/separatio /opt/threat-pipeline
-cd /opt/threat-pipeline
+git clone https://github.com/Fennek115/separatio /opt/intel
+cd /opt/intel
 
 python3 -m venv venv
-source venv/bin/activate
-
-pip install -r requirements.txt
+venv/bin/pip install -e '.[dev]'
 ```
+
+This exposes the console commands `separatio`, `separatio-check`, `ipcheck`
+and `ipcheck-run` inside the venv.
 
 #### PDF export dependencies (optional)
 
-`weasyprint` requires a few system libraries on Debian/Ubuntu:
+`weasyprint` (installed as a dependency) requires a few system libraries on Debian/Ubuntu:
 
 ```bash
 apt install libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf2.0-0
-pip install weasyprint
 ```
 
-If `weasyprint` is not installed, PDF output is silently skipped — all other formats still work.
+If those libraries are missing, PDF output is silently skipped — all other formats still work.
 
 ### 2. Configure
 
@@ -247,7 +250,7 @@ In Miniflux: **Settings → OPML → Import** → select `threat-analysis-feeds.
 ### 4. Verify connectivity
 
 ```bash
-python setup_check.py
+separatio-check
 ```
 
 The checker is provider-aware: it verifies Ollama + models when `PROVIDER=ollama`, or the API key + package when using a cloud provider.
@@ -255,8 +258,8 @@ The checker is provider-aware: it verifies Ollama + models when `PROVIDER=ollama
 ### 5. Test run
 
 ```bash
-python pipeline.py --dry-run          # fetch and extract only, no LLM calls
-python pipeline.py --limit 3          # full run with 3 articles
+separatio --dry-run          # fetch and extract only, no LLM calls
+separatio --limit 3          # full run with 3 articles
 ```
 
 ---
@@ -324,13 +327,10 @@ apt install libpango-1.0-0 libpangoft2-1.0-0 libgdk-pixbuf2.0-0
 # Optional: better PDF typography
 apt install fonts-ibm-plex
 
-git clone <repo-url> /opt/threat-pipeline
-cd /opt/threat-pipeline
+git clone https://github.com/Fennek115/separatio /opt/intel
+cd /opt/intel
 python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-# Optional: PDF export
-pip install weasyprint
+venv/bin/pip install -e .
 ```
 
 Edit `config.py` with the IPs of the other two containers:
@@ -343,7 +343,7 @@ MINIFLUX_API_TOKEN = "your-api-token"   # from Miniflux Settings → API Keys
 
 Verify:
 ```bash
-python setup_check.py
+separatio-check
 ```
 
 ---
@@ -516,15 +516,15 @@ Cloud providers use direct API calls (no streaming). Ollama uses streaming per p
 ## Usage
 
 ```bash
-python pipeline.py                              # full run
-python pipeline.py --limit 5                    # quick end-to-end test (5 articles)
-python pipeline.py --dry-run                    # Stage 1 only — no LLM calls
-python pipeline.py --report-only                # skip Stages 1–2, regenerate report from today's cache
-python pipeline.py --no-mark-read               # don't mark articles as read in Miniflux
-python pipeline.py --categories "Vulnerability"
-python pipeline.py --categories "Threat Intel,Cibersecurity"
-python pipeline.py --weekly                     # generate weekly digest from last 7 days of cache
-python pipeline.py --weekly --weekly-days 5     # use last 5 days instead
+separatio                              # full run
+separatio --limit 5                    # quick end-to-end test (5 articles)
+separatio --dry-run                    # Stage 1 only — no LLM calls
+separatio --report-only                # skip Stages 1–2, regenerate report from today's cache
+separatio --no-mark-read               # don't mark articles as read in Miniflux
+separatio --categories "Vulnerability"
+separatio --categories "Threat Intel,Cibersecurity"
+separatio --weekly                     # generate weekly digest from last 7 days of cache
+separatio --weekly --weekly-days 5     # use last 5 days instead
 ```
 
 ### Flag reference
@@ -546,10 +546,10 @@ With 39 feeds, `PER_FEED_LIMIT=10`, and `MAX_ARTICLES=120`, a single run covers 
 The `--categories` flag enables day-by-day rotation for full weekly coverage:
 
 ```bash
-python pipeline.py --categories "Vulnerability"
-python pipeline.py --categories "Threat Intel"
-python pipeline.py --categories "Cibersecurity"
-python pipeline.py --categories "Hacking & Research,LATAM"
+separatio --categories "Vulnerability"
+separatio --categories "Threat Intel"
+separatio --categories "Cibersecurity"
+separatio --categories "Hacking & Research,LATAM"
 ```
 
 Available category names (must match OPML exactly):
@@ -562,21 +562,21 @@ Available category names (must match OPML exactly):
 For CPU-only hardware (~1.75 min/article in Stage 2), rotating categories keeps each run within ~3.5h:
 
 ```cron
-0 2 * * 1,3,5  root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Vulnerability" >> /var/log/threat-pipeline.log 2>&1
-0 2 * * 2,4    root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Threat Intel" >> /var/log/threat-pipeline.log 2>&1
-0 3 * * 6      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Cibersecurity" >> /var/log/threat-pipeline.log 2>&1
-0 3 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --categories "Hacking & Research,LATAM" >> /var/log/threat-pipeline.log 2>&1
+0 2 * * 1,3,5  root cd /opt/threat-pipeline && source venv/bin/activate && separatio --categories "Vulnerability" >> /var/log/threat-pipeline.log 2>&1
+0 2 * * 2,4    root cd /opt/threat-pipeline && source venv/bin/activate && separatio --categories "Threat Intel" >> /var/log/threat-pipeline.log 2>&1
+0 3 * * 6      root cd /opt/threat-pipeline && source venv/bin/activate && separatio --categories "Cibersecurity" >> /var/log/threat-pipeline.log 2>&1
+0 3 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && separatio --categories "Hacking & Research,LATAM" >> /var/log/threat-pipeline.log 2>&1
 # Weekly digest every Sunday at 08:00 (after the daily cron has run)
-0 8 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --weekly >> /var/log/threat-pipeline.log 2>&1
+0 8 * * 0      root cd /opt/threat-pipeline && source venv/bin/activate && separatio --weekly >> /var/log/threat-pipeline.log 2>&1
 ```
 
 **Cloud providers** — Stage 2+3+4 takes ~5 min total, all categories in one run:
 
 ```cron
 # Daily report at 07:00 — covers all 39 feeds in a single run
-0 7 * * *  root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py >> /var/log/threat-pipeline.log 2>&1
+0 7 * * *  root cd /opt/threat-pipeline && source venv/bin/activate && separatio >> /var/log/threat-pipeline.log 2>&1
 # Weekly digest every Monday at 08:00
-0 8 * * 1  root cd /opt/threat-pipeline && source venv/bin/activate && python pipeline.py --weekly >> /var/log/threat-pipeline.log 2>&1
+0 8 * * 1  root cd /opt/threat-pipeline && source venv/bin/activate && separatio --weekly >> /var/log/threat-pipeline.log 2>&1
 ```
 
 ---

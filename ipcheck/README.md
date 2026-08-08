@@ -8,14 +8,14 @@ Herramienta de línea de comandos para analizar IPs de alertas Wazuh contra múl
 alertas_wazuh.csv / .xlsx
         │
         ▼
- procesar_excel.py  ──► ip_procesadas.txt   (historial acumulativo)
+ procesar_excel      ──► ip_procesadas.txt   (historial acumulativo)
         │
         │  IPs públicas nuevas
         ▼
  ips_publicas_output.txt
         │
         ▼
- ip_threat_checker.py
+ cli.py  (comando: ipcheck)
         │
         ├── AbuseIPDB
         ├── VirusTotal
@@ -30,17 +30,23 @@ alertas_wazuh.csv / .xlsx
 
 ## Instalación
 
+`ipcheck` es un paquete del monorepo [Fennek115/separatio](https://github.com/Fennek115/separatio);
+se instala una sola vez desde la raíz del repo:
+
 ```bash
-git clone https://github.com/tu-usuario/ipcheck.git
-cd ipcheck
-pip install -r requirements.txt
-cp .env.example .env   # edita .env con tus API keys
+git clone https://github.com/Fennek115/separatio intel
+cd intel
+python3 -m venv venv
+venv/bin/pip install -e '.[dev]'
+cp .env.example .env   # edita el .env de la RAÍZ con tus API keys
 ```
+
+Quedan disponibles los comandos `ipcheck` (checker) e `ipcheck-run` (orquestador).
 
 ## Uso rápido — pipeline completo
 
 ```bash
-python3 run.py alertas_wazuh.csv
+ipcheck-run alertas_wazuh.csv
 ```
 
 El orquestador ejecuta los dos pasos en secuencia:
@@ -51,16 +57,16 @@ El orquestador ejecuta los dos pasos en secuencia:
 
 ```bash
 # Solo extraer IPs, sin consultar APIs (para revisar antes de gastar cuota)
-python3 run.py alertas_wazuh.csv --solo-procesar
+ipcheck-run alertas_wazuh.csv --solo-procesar
 
 # Historial, output y Excel personalizados
-python3 run.py alertas_wazuh.csv --historial mis_ips.txt --output nuevas.txt --excel resultados.xlsx
+ipcheck-run alertas_wazuh.csv --historial mis_ips.txt --output nuevas.txt --excel resultados.xlsx
 
 # IPs que expiren en 90 días en lugar de 365
-python3 run.py alertas_wazuh.csv --expiry-dias 90
+ipcheck-run alertas_wazuh.csv --expiry-dias 90
 
 # Sin generar Excel
-python3 run.py alertas_wazuh.csv --no-excel
+ipcheck-run alertas_wazuh.csv --no-excel
 ```
 
 ## Uso manual — paso a paso
@@ -68,7 +74,7 @@ python3 run.py alertas_wazuh.csv --no-excel
 ### Paso 1: procesar el Excel de Wazuh
 
 ```bash
-python3 procesar_excel.py alertas_wazuh.csv
+python -m ipcheck.procesar_excel alertas_wazuh.csv
 ```
 
 El script:
@@ -83,20 +89,20 @@ El script:
 
 ```bash
 # Con historial y output personalizados
-python3 procesar_excel.py alertas_wazuh.csv --historial mis_ips.txt --output nuevas.txt
+python -m ipcheck.procesar_excel alertas_wazuh.csv --historial mis_ips.txt --output nuevas.txt
 ```
 
 ### Paso 2: consultar APIs
 
 ```bash
-python3 ip_threat_checker.py ips_publicas_output.txt
+ipcheck ips_publicas_output.txt
 ```
 
 Genera `threat_report_YYYYMMDD_HHMMSS.json` con todos los resultados.
 
 ## Configuración de API keys
 
-Edita `.env`:
+Edita el `.env` de la raíz del monorepo:
 
 ```env
 ABUSEIPDB_API_KEY=tu_key_aqui
@@ -246,14 +252,14 @@ Ese campo aparece como "usuario" en el output del checker, dando contexto inmedi
 ## Archivos del proyecto
 
 ```
-ipcheck/
-├── run.py                    # Orquestador: ejecuta el pipeline completo
+ipcheck/                      # paquete dentro del monorepo (deps en el pyproject.toml raíz)
+├── run.py                    # Orquestador (comando ipcheck-run): pipeline completo
 ├── procesar_excel.py         # Paso 1: extrae IPs del Excel de Wazuh
-├── ip_threat_checker.py      # Paso 2: consulta de APIs de threat intelligence
-├── ip_procesadas.txt         # Historial acumulativo (se crea automáticamente)
-├── ips_publicas_output.txt   # IPs nuevas del último procesamiento
-├── threat_report_*.json      # Reportes generados por el checker
-├── requirements.txt
-├── .env                      # API keys (gitignoreado)
-└── .env.example
+├── cli.py                    # Paso 2 (comando ipcheck): consulta de APIs
+├── ip_enricher.py            # Librería reutilizable (la consume el pipeline Separatio)
+├── ip_procesadas.txt         # Historial acumulativo (se crea automáticamente, gitignoreado)
+├── ips_publicas_output.txt   # IPs nuevas del último procesamiento (gitignoreado)
+└── threat_report_*.json      # Reportes generados por el checker (gitignoreados)
 ```
+
+Las API keys viven en el `.env` de la **raíz del monorepo** (gitignoreado; ver `.env.example`).
