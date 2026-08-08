@@ -1,46 +1,32 @@
 # SOC IP Threat Intelligence Checker
 
-Herramienta de línea de comandos para analizar IPs contra múltiples fuentes de threat intelligence de forma simultánea. Diseñada para trabajo en SOC: triage rápido, detección de C2, identificación de IPs de ataque activas y generación de reportes JSON.
+Herramienta de línea de comandos para analizar IPs de alertas Wazuh contra múltiples fuentes de threat intelligence. Diseñada para trabajo en SOC: triage rápido, detección de C2, identificación de IPs de ataque activas y generación de reportes JSON.
 
-## APIs integradas
-
-| API | Key requerida | Límite gratuito | Qué aporta |
-|-----|:---:|---|---|
-| [AbuseIPDB](https://www.abuseipdb.com) | Sí | 1.000 req/día | Abuse score, categorías de ataque, reportes históricos |
-| [VirusTotal](https://www.virustotal.com) | Sí | 500 req/día | Detecciones por motores AV, reputación, tags |
-| [GreyNoise](https://www.greynoise.io) | No | 1.000 req/día | Clasificación ruido/malicioso — clave para triage |
-| [AlienVault OTX](https://otx.alienvault.com) | Sí | Sin límite oficial | Pulses de threat intel, familias de malware |
-| [URLhaus](https://urlhaus.abuse.ch) | No | Sin límite | IPs sirviendo URLs de malware activas |
-| [Feodo Tracker](https://feodotracker.abuse.ch) | No | Sin límite | Detección de C2 activos (Emotet, QakBot, etc.) |
-
-## Output de ejemplo
+## Arquitectura del pipeline
 
 ```
-=================================================================
-  SOC THREAT INTELLIGENCE CHECKER
-  2025-04-27 10:32:11
-=================================================================
-
-[*] 185.220.101.45      usuario: desconocido
-    AbuseIPDB  -> [HTTP 200] Score: 100% | Reportes: 847 (312 usuarios) | País: DE
-                  ISP: Frantech Solutions | Uso: Data Center | Último: 2025-04-26 | Categorías: SSH, Port Scan, BruteForce
-    VirusTotal -> [HTTP 200] Malicious: 12 | Suspicious: 2 | País: DE | AS: Frantech Solutions
-                  Reputación: -85 | Último análisis: 2025-04-25 | Tags: tor
-    GreyNoise  -> [HTTP 200] MALICIOSO | Último: 2025-04-26
-    OTX        -> [HTTP 200] Pulses: 14 | Reputación: -3 | Tags: tor, scanner, brute-force
-    URLhaus    -> [HTTP 200] Sin resultados
-    Feodo      -> [C2 DETECTADO] Malware: Emotet | Estado: online | Visto: 2024-12-01 → 2025-04-26
-    Riesgo     -> CRITICO
+alertas_wazuh.csv / .xlsx
+        │
+        ▼
+ procesar_excel.py  ──► ip_procesadas.txt   (historial acumulativo)
+        │
+        │  IPs públicas nuevas
+        ▼
+ ips_publicas_output.txt
+        │
+        ▼
+ ip_threat_checker.py
+        │
+        ├── AbuseIPDB
+        ├── VirusTotal
+        ├── GreyNoise
+        ├── AlienVault OTX
+        ├── URLhaus (abuse.ch)
+        └── ThreatFox (abuse.ch)
+        │
+        ▼
+ threat_report_YYYYMMDD_HHMMSS.json
 ```
-
-## Niveles de riesgo
-
-| Nivel | Condiciones |
-|-------|------------|
-| **CRITICO** | AbuseIPDB ≥ 80%, VT malicious ≥ 5, GreyNoise = malicioso, o Feodo encontrado |
-| **ALTO** | AbuseIPDB ≥ 50%, VT malicious ≥ 2, o OTX pulses ≥ 5 |
-| **MEDIO** | AbuseIPDB ≥ 20%, VT malicious ≥ 1, OTX pulses ≥ 1, o URLhaus encontrado |
-| **BAJO** | Sin indicadores de amenaza |
 
 ## Instalación
 
@@ -48,72 +34,226 @@ Herramienta de línea de comandos para analizar IPs contra múltiples fuentes de
 git clone https://github.com/tu-usuario/ipcheck.git
 cd ipcheck
 pip install -r requirements.txt
+cp .env.example .env   # edita .env con tus API keys
 ```
+
+## Uso rápido — pipeline completo
+
+```bash
+python3 run.py alertas_wazuh.csv
+```
+
+El orquestador ejecuta los dos pasos en secuencia:
+1. Extrae IPs públicas nuevas del Excel (filtradas contra el historial)
+2. Las analiza con el sistema de 3 niveles y genera el reporte
+
+### Opciones del orquestador
+
+```bash
+# Solo extraer IPs, sin consultar APIs (para revisar antes de gastar cuota)
+python3 run.py alertas_wazuh.csv --solo-procesar
+
+# Historial, output y Excel personalizados
+python3 run.py alertas_wazuh.csv --historial mis_ips.txt --output nuevas.txt --excel resultados.xlsx
+
+# IPs que expiren en 90 días en lugar de 365
+python3 run.py alertas_wazuh.csv --expiry-dias 90
+
+# Sin generar Excel
+python3 run.py alertas_wazuh.csv --no-excel
+```
+
+## Uso manual — paso a paso
+
+### Paso 1: procesar el Excel de Wazuh
+
+```bash
+python3 procesar_excel.py alertas_wazuh.csv
+```
+
+El script:
+- Muestra las columnas disponibles con ejemplos de valor
+- Pregunta qué columnas contienen IPs (srcip, dstip, o ambas)
+- Descarta IPs privadas, loopback, link-local, multicast y reservadas
+- Consulta `ip_procesadas.txt` y salta las IPs ya analizadas antes
+- Muestra el análisis de puertos entre las IPs nuevas
+- Advierte sobre puertos sospechosos (4444, 1337, 31337, etc.)
+- Estima cuántas requests de API consumirá
+- Escribe `ips_publicas_output.txt` y actualiza `ip_procesadas.txt`
+
+```bash
+# Con historial y output personalizados
+python3 procesar_excel.py alertas_wazuh.csv --historial mis_ips.txt --output nuevas.txt
+```
+
+### Paso 2: consultar APIs
+
+```bash
+python3 ip_threat_checker.py ips_publicas_output.txt
+```
+
+Genera `threat_report_YYYYMMDD_HHMMSS.json` con todos los resultados.
 
 ## Configuración de API keys
 
-```bash
-cp .env.example .env
-```
-
-Edita `.env` y rellena tus keys:
+Edita `.env`:
 
 ```env
 ABUSEIPDB_API_KEY=tu_key_aqui
 VIRUSTOTAL_API_KEY=tu_key_aqui
 OTX_API_KEY=tu_key_aqui
+ABUSECH_API_KEY=tu_key_aqui
 ```
 
-Dónde obtener cada key:
-- **AbuseIPDB**: [abuseipdb.com/account/api](https://www.abuseipdb.com/account/api)
-- **VirusTotal**: [virustotal.com/gui/my-apikey](https://www.virustotal.com/gui/my-apikey)
-- **OTX**: [otx.alienvault.com](https://otx.alienvault.com) → tu perfil → API Key
+| Dónde obtener cada key | |
+|---|---|
+| AbuseIPDB | [abuseipdb.com/account/api](https://www.abuseipdb.com/account/api) |
+| VirusTotal | [virustotal.com/gui/my-apikey](https://www.virustotal.com/gui/my-apikey) |
+| AlienVault OTX | [otx.alienvault.com](https://otx.alienvault.com) → tu perfil → API Key |
+| abuse.ch (URLhaus + ThreatFox) | [auth.abuse.ch](https://auth.abuse.ch) — cubre ambas APIs con una sola key |
 
-GreyNoise, URLhaus y Feodo Tracker no requieren key — funcionan automáticamente.
+Las APIs sin key (GreyNoise) funcionan automáticamente.
 
-## Uso
+## APIs integradas y límites
 
-Crea un archivo de IPs (una por línea). El usuario es opcional:
+| API | Key | Límite free | Qué aporta |
+|-----|:---:|---|---|
+| AbuseIPDB | Sí | 1.000 req/día | Abuse score 0-100, categorías de ataque, historial de reportes |
+| VirusTotal | Sí | **500 req/día, 4 req/min** | Consenso de ~90 motores AV, reputación, tags |
+| GreyNoise | No* | Sin límite con key gratuita | Clasifica si la IP es ruido de internet o amenaza activa |
+| AlienVault OTX | Sí | Sin límite oficial | Threat pulses, familias de malware, infraestructura |
+| URLhaus | Sí | Sin límite | IPs sirviendo URLs de malware activas |
+| ThreatFox | Sí | Sin límite | IOCs de C2 activos (Cobalt Strike, QakBot, etc.) |
+| **Shodan InternetDB** | **No** | **Sin límite documentado** | Puertos abiertos, CVEs conocidas, hostnames, software |
+| **ip-api.com** | **No** | **45 req/min, sin límite diario** | Ciudad/región, ISP, ASN, detección proxy/datacenter |
+
+> *GreyNoise sin key tiene un límite real de ~10 consultas/día. Crear cuenta gratuita en greynoise.io y configurar la key elimina ese límite.
+
+> **VirusTotal es el cuello de botella:** 4 req/min en el plan free. El script espera 15 segundos entre IPs cuando VT está habilitado. Si la cuota diaria se agota (429), VT se deshabilita automáticamente para la sesión y las demás APIs continúan sin interrupción.
+
+> **Shodan InternetDB e ip-api.com son gratuitos y sin key** — siempre activos.
+
+## Análisis por niveles — protección de cuota
+
+El checker analiza cada IP en cascada, parando en el nivel mínimo necesario:
+
+| Nivel | APIs | Cuándo para | Resultado |
+|-------|------|------------|-----------|
+| **1** | ip-api + GreyNoise + Shodan | GreyNoise RIOT, o benign+datacenter sin puertos sospechosos | BAJO — no gasta AbuseIPDB ni VT |
+| **2** | + AbuseIPDB + OTX | Score=0, Pulses=0, sin CVEs, sin proxy | BAJO — no gasta VT |
+| **3** | + VirusTotal + URLhaus + ThreatFox | Siempre completa | Análisis completo |
+
+En un export típico de Wazuh, el 40-60% de IPs (DNS públicos, CDNs, NTP conocidos) se resuelven en Nivel 1 sin tocar la cuota de VT.
+
+## Mecanismo de historial y continuación de análisis
+
+`ip_procesadas.txt` protege la cuota y permite continuar sesiones interrumpidas:
+
+- El historial lo escribe **el checker** (no el procesador de Excel), IP a IP, justo después de verificar cada una
+- Si el checker se interrumpe en la IP 15 de 100, solo las 15 verificadas están en historial — mañana el procesador encuentra las 85 restantes como nuevas
+- Si la cuota de VT se agota a mitad de sesión, las IPs que necesitaban VT **no se registran** en historial → mañana se re-analizan con VT disponible
+- IPs cortadas en Nivel 1 o 2 (sin señales) sí se registran → no se re-analizan
 
 ```
-# formato: IP,usuario  (el usuario es opcional)
-192.168.1.1,john.doe
-10.0.0.5
-185.220.101.45,sospechoso
+# Verificadas el 2026-05-12 14:30:00   ← escrito por el checker al iniciar sesión
+1.1.1.1                                 ← registrada después de verificar (Nivel 1, RIOT)
+190.102.231.147                         ← registrada después de verificar (Nivel 2, sin señales)
+# Verificadas el 2026-05-13 09:00:00
+203.0.113.45                            ← registrada (Nivel 3, análisis completo)
 ```
 
-Ejecuta el script:
+Las IPs expiran del historial después de `--expiry-dias` días (default: 365). Al expirar se re-analizan, útil porque las reputaciones de IPs cambian con el tiempo.
 
-```bash
-# usando el archivo por defecto (ips.txt)
-python3 ip_threat_checker.py
+## Formato del archivo de IPs (manual)
 
-# con un archivo personalizado
-python3 ip_threat_checker.py mi_lista.txt
+Si querés alimentar el checker directamente sin pasar por el procesador:
+
+```
+# comentarios con #
+185.220.101.45,john.doe      # IP con usuario asociado
+10.0.0.5                     # solo IP — aparece como "desconocido"
 ```
 
-Al terminar se genera un reporte JSON con todos los datos en `threat_report_YYYYMMDD_HHMMSS.json`.
+El procesador escribe automáticamente el puerto como contexto:
+
+```
+190.102.231.147,p:123/NTP c:74
+181.190.22.69,p:123/NTP c:24
+```
+
+Ese campo aparece como "usuario" en el output del checker, dando contexto inmediato del servicio contactado.
+
+## Niveles de riesgo
+
+| Nivel | Condiciones |
+|-------|------------|
+| **CRITICO** | AbuseIPDB ≥ 80%, VT malicious ≥ 5, GreyNoise = malicioso, o ThreatFox encontrado |
+| **ALTO** | AbuseIPDB ≥ 50%, VT malicious ≥ 2, o OTX pulses ≥ 5 |
+| **MEDIO** | AbuseIPDB ≥ 20%, VT malicious ≥ 1, OTX pulses ≥ 1, o URLhaus encontrado |
+| **BAJO** | Sin indicadores de amenaza |
+
+## Output de ejemplo
+
+```
+================================================================
+  SOC THREAT INTELLIGENCE CHECKER
+  2026-05-12 14:30:01
+================================================================
+
+[*] 185.220.101.45      usuario: p:22/SSH c:4821
+    AbuseIPDB  -> [HTTP 200] Score: 100% | Reportes: 847 (312 usuarios) | País: DE
+                  ISP: Frantech Solutions | Uso: Data Center | Último: 2026-05-11 | Categorías: SSH, Port Scan, BruteForce
+    VirusTotal -> [HTTP 200] Malicious: 12 | Suspicious: 2 | País: DE | AS: Frantech Solutions
+                  Reputación: -85 | Último análisis: 2026-05-10 | Tags: tor
+    GreyNoise  -> [HTTP 200] MALICIOSO | Último: 2026-05-11
+    OTX        -> [HTTP 200] Pulses: 14 | Reputación: -3 | Tags: tor, scanner, brute-force
+    URLhaus    -> [HTTP 200] Sin resultados
+    ThreatFox  -> [IOC DETECTADO] Malware: Cobalt Strike | Tipo: botnet_cc | Confianza: 90% | IOCs: 3
+    Riesgo     -> CRITICO
+```
 
 ## Estructura del reporte JSON
 
 ```json
 {
-  "generated_at": "2025-04-27T10:32:55",
-  "ip_file": "ips.txt",
+  "generated_at": "2026-05-12T14:30:55",
+  "ip_file": "ips_publicas_output.txt",
   "total_ips": 5,
-  "api_stats": { "abuseipdb": {"ok": 5, "error": 0, "skipped": 0}, ... },
+  "api_stats": {
+    "abuseipdb":  {"ok": 5, "error": 0, "skipped": 0},
+    "virustotal": {"ok": 5, "error": 0, "skipped": 0},
+    "greynoise":  {"ok": 5, "error": 0, "skipped": 0},
+    "otx":        {"ok": 5, "error": 0, "skipped": 0},
+    "urlhaus":    {"ok": 5, "error": 0, "skipped": 0},
+    "threatfox":  {"ok": 5, "error": 0, "skipped": 0}
+  },
   "results": [
     {
       "ip": "185.220.101.45",
-      "user": "desconocido",
+      "user": "p:22/SSH c:4821",
       "risk": "CRITICO",
-      "abuseipdb": { "abuse_score": 100, "country": "DE", ... },
-      "virustotal": { "malicious": 12, ... },
-      "greynoise":  { "classification": "malicious", ... },
-      "otx":        { "pulse_count": 14, ... },
-      "urlhaus":    { "found": false, ... },
-      "feodo":      { "found": true, "malware": "Emotet", "c2_status": "online", ... }
+      "abuseipdb":  {"abuse_score": 100, "country": "DE", "isp": "Frantech Solutions", ...},
+      "virustotal": {"malicious": 12, "suspicious": 2, ...},
+      "greynoise":  {"classification": "malicious", "noise": true, ...},
+      "otx":        {"pulse_count": 14, "reputation": -3, ...},
+      "urlhaus":    {"found": false, ...},
+      "threatfox":  {"found": true, "malware": ["Cobalt Strike"], "confidence": 90, ...}
     }
   ]
 }
+```
+
+## Archivos del proyecto
+
+```
+ipcheck/
+├── run.py                    # Orquestador: ejecuta el pipeline completo
+├── procesar_excel.py         # Paso 1: extrae IPs del Excel de Wazuh
+├── ip_threat_checker.py      # Paso 2: consulta de APIs de threat intelligence
+├── ip_procesadas.txt         # Historial acumulativo (se crea automáticamente)
+├── ips_publicas_output.txt   # IPs nuevas del último procesamiento
+├── threat_report_*.json      # Reportes generados por el checker
+├── requirements.txt
+├── .env                      # API keys (gitignoreado)
+└── .env.example
 ```

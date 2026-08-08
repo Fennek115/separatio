@@ -1,8 +1,11 @@
 # API keys - NUNCA subir
 .env
 
-# Reportes generados
+# Reportes y datos de corridas (nunca al repo - es público)
 threat_report_*.json
+data/
+*.log
+ip_threat_checker.txt
 
 # Python
 __pycache__/
@@ -11,6 +14,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.pytest_cache/
 
 # Windows / WSL
 *.Zone.Identifier
