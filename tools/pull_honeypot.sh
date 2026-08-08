@@ -37,6 +37,8 @@ if [ -z "${NO_PULL:-}" ]; then
   $SSH1 'sudo cat /home/cowrie/cowrie/var/log/cowrie/cowrie.json 2>/dev/null' > "$RAW_DIR/cowrie.json"    || true
   $SSH1 'sudo cat /var/log/nginx/honey.json 2>/dev/null'                       > "$RAW_DIR/web.json"       || true
   $SSH1 'sudo cscli decisions list -o json 2>/dev/null'                        > "$RAW_DIR/decisions.json" || echo "[]" > "$RAW_DIR/decisions.json"
+  # Binarios que Cowrie descargó en sesión (2º stage real, nombrados por SHA-256).
+  $SSH1 'sudo tar -C /home/cowrie/cowrie/var/lib/cowrie -cf - downloads 2>/dev/null' > "$RAW_DIR/cowrie_downloads.tar" || true
 
   echo "[pull] VM2 (Beelzebub, servicios golosos) desde $VM2_HOST..."
   $SSH2 'sudo cat /var/lib/beelzebub/logs/beelzebub.json 2>/dev/null'          > "$RAW_DIR/beelzebub.json" || true
@@ -44,7 +46,7 @@ fi
 
 # Consolidar a attackers.json (IP -> hits, tipos, sensores, señuelos, crowdsec).
 python3 - "$RAW_DIR" "$OUT_DIR" "$WINDOW" <<'PY'
-import json, sys, ipaddress, csv, hashlib, re
+import json, sys, ipaddress, csv, hashlib, re, tarfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -89,6 +91,7 @@ def bump(ip, kind, when, uri=None, sensor=None):
 # payloads: bytes crudos deduplicados por SHA-256 (cuarentena, VT/YARA/MalwareBazaar).
 events = []
 payloads = {}          # sha256 -> bytes (dedup en esta corrida)
+dl_meta = {}           # shasum de descarga Cowrie -> (ip, when) para atribuir el binario
 # TCP triviales que NO valen como "payload" archivable (sí como técnica).
 TRIVIAL_TCP = re.compile(r'^(PING|INFO|QUIT|COMMAND(\s+DOCS)?|AUTH\b.*|SELECT\s+\d+|'
                          r'CLIENT\s+\S+|ECHO\b.*|HELLO\b.*)\s*$', re.I | re.S)
@@ -121,6 +124,11 @@ for line in lines("cowrie.json"):
         continue
     ip = e.get("src_ip")
     bump(ip, "cowrie", when, sensor="vm1-cowrie")
+    # HASSH: fingerprint del cliente/tooling SSH (el "JA3" del SSH), robusto al
+    # cambio de IP. Cowrie lo emite en los eventos de kex.
+    h = e.get("hassh")
+    if h and ip and public(ip) and ip in att:
+        att[ip].setdefault("hassh", set()).add(h)
     eid = e.get("eventid", "")
     if eid == "cowrie.command.input":
         inp = e.get("input") or ""
@@ -130,8 +138,11 @@ for line in lines("cowrie.json"):
         record(when, ip, "vm1-cowrie", "ssh",
                f"login {e.get('username')}:{e.get('password')} ({eid.split('.')[-1]})")
     elif eid == "cowrie.session.file_download":
+        sh = e.get("shasum")
+        if sh:
+            dl_meta.setdefault(sh, (ip, when))
         record(when, ip, "vm1-cowrie", "ssh",
-               f"download {e.get('url') or e.get('shasum')}")
+               f"download {e.get('url') or sh}")
 
 # --- VM1 Web (nginx honey): una línea JSON por request ---
 for line in lines("web.json"):
@@ -179,6 +190,32 @@ for line in lines("beelzebub.json"):
     bump(ip, kind, when, action, sensor="vm2-services")
     record(when, ip, "vm2-services", kind, action, pb)
 
+# --- VM1 Cowrie: binarios descargados en sesión (2º stage real) al corpus ---
+# Cowrie los nombra por SHA-256; se hashea de nuevo por las dudas y se atribuye
+# a la IP/hora del evento file_download correspondiente.
+tarp = raw / "cowrie_downloads.tar"
+if tarp.exists() and tarp.stat().st_size:
+    try:
+        with tarfile.open(tarp) as tf:
+            for m in tf.getmembers():
+                if not m.isfile() or not m.size:
+                    continue
+                f = tf.extractfile(m)
+                data = f.read() if f else b""
+                if not data:
+                    continue
+                sha = hashlib.sha256(data).hexdigest()
+                payloads.setdefault(sha, data)
+                meta = dl_meta.get(sha) or dl_meta.get(Path(m.name).name)
+                ip_dl, when_dl = (meta if meta else (None, None))
+                events.append({"ts": when_dl.isoformat() if when_dl else None,
+                               "ip": ip_dl or "?", "sensor": "vm1-cowrie",
+                               "service": "ssh-download",
+                               "action": f"malware sample {sha[:12]}",
+                               "sha256": sha, "size": len(data)})
+    except Exception:
+        pass
+
 # --- CrowdSec (VM1): marcar IPs con decisión ---
 try:
     for d in json.loads((raw / "decisions.json").read_text() or "[]"):
@@ -194,6 +231,7 @@ for a in att.values():
     a["kinds"] = sorted(a["kinds"])
     a["sensors"] = sorted(a["sensors"])
     a["sample_uris"] = sorted(a["sample_uris"])[:5]
+    a["hassh"] = sorted(a.get("hassh", []))
     attackers.append(a)
 attackers.sort(key=lambda a: a["hits"], reverse=True)
 
@@ -214,6 +252,15 @@ def write_csv(path):
                        + (" | crowdsec" if a["crowdsec"] else ""))
             w.writerow([a["ip"], "ip-src", "Network activity", 1,
                         comment, a.get("first_seen") or "", a.get("last_seen") or ""])
+        # HASSH (fingerprint del cliente SSH) como IOC propio, tipo MISP hassh-md5.
+        hassh_ips = {}
+        for a in attackers:
+            for h in a.get("hassh", []):
+                hassh_ips.setdefault(h, []).append(a["ip"])
+        for h, ips in hassh_ips.items():
+            w.writerow([h, "hassh-md5", "Network activity", 1,
+                        f"honeypot propio | cliente SSH visto desde: {', '.join(ips[:8])}",
+                        "", ""])
 
 # (1) Rolling: lo que lee el enricher de Separatio + CSV "última corrida".
 (out / "attackers.json").write_text(json.dumps(payload, indent=1))
