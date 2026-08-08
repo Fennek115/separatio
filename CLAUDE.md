@@ -13,9 +13,9 @@ continuación del repo git `Fennek115/separatio` (**público**) — la historia 
 preservó entera y la de ipcheck entró por `git subtree`. Decisión del usuario 2026-08-08: el
 remoto "probablemente se llame algo como separatio" — no se renombró nada en GitHub todavía.
 
-Estado git: varios commits locales **sin pushear** (el push a `Fennek115/separatio` sería
-fast-forward). El repo viejo `Fennek115/ip_threatcheck` (también público) quedó congelado en
-GitHub — pendiente decidir si se archiva.
+Estado git: **pusheado a `Fennek115/separatio`** el 2026-08-08. El repo viejo
+`Fennek115/ip_threatcheck` (también público) quedó congelado en GitHub — pendiente decidir
+si se archiva.
 
 ## Layout
 
@@ -50,14 +50,23 @@ y el informe se regeneró re-marcando unread el batch en Miniflux y corriendo el
 nuevo. Moraleja vigente: **el dry-run viejo era destructivo; el nuevo no. No correr versiones
 anteriores a `7b675cf` con `--dry-run` un día que ya tuvo corrida real.**
 
+## Automatización (activa desde 2026-08-08)
+
+**Infraestructura de PRUEBAS corriendo en este laptop:** timers systemd de usuario —
+`separatio.timer` (diario 07:00) y `separatio-weekly.timer` (lunes 08:00), ambos
+`Persistent=true` (si el laptop estaba apagado, la corrida sale al despertar). Cadencia
+decidida, operación y el **diseño definitivo (LXC en `motherbase`) listo para ejecutar** en
+`docs/DEPLOY.md`. ⚠️ Al encender el LXC, apagar los timers del laptop **primero** — dos
+corridas el mismo día se pisan los leídos de Miniflux (checklist en `DEPLOY.md` §3.5).
+
 ## Pendiente (en orden)
 
-1. ⚠️ **`ANTHROPIC_API_KEY` definitiva** (la actual es temporal de prueba).
-2. **Dónde corre + timer diario** (decisión diferida de Motherbase): lo natural es un LXC
-   nuevo en `motherbase` junto a Miniflux, systemd timer + `EnvironmentFile=/etc/intel/intel.env`
-   (esquema en `docs/PLAN-REORDEN.md` §4). Con eso arranca el criterio de cierre de F0:
-   **dos semanas de informes diarios sin intervención**.
-3. Push del monorepo a GitHub y decidir si se archiva `Fennek115/ip_threatcheck`.
+1. ⚠️ **`ANTHROPIC_API_KEY` definitiva** (la actual es temporal de prueba; el usuario decidió
+   esperar a que termine la etapa de pruebas para ponerla).
+2. **Ejecutar el deploy definitivo** (`docs/DEPLOY.md` §3) cuando el usuario esté cerca del
+   server: pide el reinicio pendiente del host (kernel sin cargar) y la key definitiva. Con el
+   CT andando arrancan las **dos semanas de informes sin intervención** que cierran F0.
+3. Decidir si se archiva `Fennek115/ip_threatcheck` en GitHub.
 4. Frente 2: OCR de imágenes en Stage 1–2 (idea AIOCRIOC, ~15 líneas con pytesseract;
    ver `docs/CAPAS-Y-FUENTES.md`). Recién después del deploy.
 5. Bugs menores conocidos: enricher OpenPhish falla con "Invalid IPv6 URL" (no rompe el run);
