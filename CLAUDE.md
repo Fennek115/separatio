@@ -61,7 +61,12 @@ anteriores a `7b675cf` con `--dry-run` un día que ya tuvo corrida real.**
 4. Frente 2: OCR de imágenes en Stage 1–2 (idea AIOCRIOC, ~15 líneas con pytesseract;
    ver `docs/CAPAS-Y-FUENTES.md`). Recién después del deploy.
 5. Bugs menores conocidos: enricher OpenPhish falla con "Invalid IPv6 URL" (no rompe el run);
-   warnings cosméticos de trafilatura en Stage 1. Backlog grande en `docs/IMPROVEMENTS.md`.
+   warnings cosméticos de trafilatura en Stage 1. **Nuevo 2026-08-08:** Stage 1 puede colgarse
+   indefinidamente en la extracción de un artículo (visto: 37 min dormido en un sleep, 0% CPU,
+   sockets en CLOSE-WAIT; `trafilatura.fetch_url` se llama sin timeout en `extractor.py:53`).
+   Para un cron desatendido hace falta un timeout duro por artículo — anotado para antes/durante
+   el deploy. Mitigación manual: `NO_SCRAPE_DOMAINS` para el dominio culpable, o matar y relanzar
+   (es seguro: no marca leídos ni escribe nada hasta el final). Backlog grande en `docs/IMPROVEMENTS.md`.
 
 ## Lo que NO hay que rediscutir (decidido en Motherbase)
 
