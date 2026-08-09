@@ -13,9 +13,20 @@ from separatio import runlog
 
 logger = logging.getLogger(__name__)
 
-# IOCs por artículo que entran al prompt (Stage 3 y fases). Lo que exceda se
-# registra como Drop y se declara al cierre de la corrida.
-PROMPT_IOCS_PER_ARTICLE = 8
+# Topes por defecto si `config.PROMPT_CAPS` no los trae. Desde F-I el valor real
+# vive en config.py, en un solo lugar y medido contra el manifiesto — acá sólo
+# quedan los mínimos para que el módulo funcione importado suelto (tests).
+_CAP_DEFAULTS = {"iocs_per_article": 20}
+
+
+def _cap(name: str) -> int:
+    """Tope de prompt, leído de config **en cada llamada**.
+
+    Leerlo al importar lo congelaría: el A/B de F-I compara dos valores del
+    mismo tope sobre el mismo caché, y los tests lo cambian por monkeypatch."""
+    from separatio import config
+    caps = getattr(config, "PROMPT_CAPS", {}) or {}
+    return int(caps.get(name, _CAP_DEFAULTS.get(name, 10)))
 
 
 # ─────────────────────────────────────────────────────────
@@ -40,6 +51,13 @@ class ArticleSummary:
     affected_systems: list[str] = field(default_factory=list)
     summary: str = ""
     iocs: list[str] = field(default_factory=list)
+    # F-I: tres campos que hasta ahora vivían enterrados en la prosa de
+    # `summary`, donde el correlator no los podía cruzar ni history trendear.
+    # Con default_factory/default para que un caché viejo (sin estas claves)
+    # siga cargando — `--report-only` sobre el caché de ayer no puede explotar.
+    attack_techniques: list[str] = field(default_factory=list)
+    exploitation_status: str = "unknown"   # active | poc | none | unknown
+    confidence: str = "media"              # alta | media | baja
     error: str | None = None
 
 
@@ -78,8 +96,46 @@ Responde SOLO con este JSON (sin bloques markdown, sin texto adicional):
   "cves": ["máx 10 CVE-XXXX-XXXXX mencionados, vacío si no hay"],
   "affected_systems": ["máx 5 sistemas/productos/sectores más relevantes"],
   "summary": "Análisis técnico en 4-5 oraciones en español: qué ocurrió, cómo funciona la técnica/vulnerabilidad (TTPs/MITRE), sistemas o sectores afectados, nivel de explotación activa, e impacto potencial.",
-  "iocs": ["máx 10 IPs, dominios, hashes SHA256/MD5, URLs o firmas de red mencionados explícitamente"]
+  "iocs": ["máx 10 IPs, dominios, hashes SHA256/MD5, URLs o firmas de red mencionados explícitamente"],
+  "attack_techniques": ["IDs MITRE ATT&CK explícitos, ej: T1566.001. Vacío si no se mencionan. NO los inventes ni los infieras"],
+  "exploitation_status": "active|poc|none|unknown  (active = explotación in-the-wild reportada; poc = existe PoC/exploit público; none = sin explotación conocida; unknown = el artículo no lo dice)",
+  "confidence": "alta|media|baja  (tu confianza en esta extracción, dado lo explícito que sea el artículo)"
 }}"""
+
+
+# Esquema de salida estructurada de Stage 2 (F-I). Cuatro límites de la API que
+# el esquema respeta:
+#   1. Todo objeto necesita `additionalProperties: false` y su `required`.
+#   2. Los topes ("máx 5 actores") NO se pueden expresar: las restricciones
+#      numéricas y de longitud no están soportadas — siguen en el texto del
+#      prompt, no acá.
+#   3. La primera petición con un esquema nuevo paga una compilación; después se
+#      cachea 24 h. Con una corrida diaria eso se paga todos los días: es un
+#      costo fijo chico, pero hay que saberlo antes de sorprenderse en el manifiesto.
+#   4. Si la respuesta se trunca por max_tokens el JSON puede quedar incompleto
+#      igual — por eso el reintento por JSONDecodeError se conserva como red.
+ARTICLE_SUMMARY_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "threat_type":         {"type": "string"},
+        "severity":            {"type": "string",
+                                "enum": ["Crítica", "Alta", "Media", "Baja", "Informativa"]},
+        "actors":              {"type": "array", "items": {"type": "string"}},
+        "cves":                {"type": "array", "items": {"type": "string"}},
+        "affected_systems":    {"type": "array", "items": {"type": "string"}},
+        "summary":             {"type": "string"},
+        "iocs":                {"type": "array", "items": {"type": "string"}},
+        "attack_techniques":   {"type": "array", "items": {"type": "string"}},
+        "exploitation_status": {"type": "string",
+                                "enum": ["active", "poc", "none", "unknown"]},
+        "confidence":          {"type": "string", "enum": ["alta", "media", "baja"]},
+    },
+    "required": [
+        "threat_type", "severity", "actors", "cves", "affected_systems",
+        "summary", "iocs", "attack_techniques", "exploitation_status", "confidence",
+    ],
+    "additionalProperties": False,
+}
 
 
 REPORT_SYSTEM_PROMPT = """Eres un analista senior de Cyber Threat Intelligence con 15 años de experiencia en SOC, CERT y Red Team.
@@ -130,7 +186,8 @@ def _build_pre_analysis(summaries: list[ArticleSummary]) -> str:
 def build_report_prompt(summaries: list[ArticleSummary],
                         date_str: str, language: str = "español",
                         correlation=None, trending=None,
-                        article_limit: int | None = None) -> str:
+                        article_limit: int | None = None,
+                        enrichment=None) -> str:
     # summaries ya llegan ordenados por severity_score desc desde generate_report.
     # Recortamos al límite para controlar el tamaño del prompt de Stage 3.
     prompt_summaries = summaries[:article_limit] if article_limit else summaries
@@ -144,9 +201,9 @@ def build_report_prompt(summaries: list[ArticleSummary],
         cves_str     = ", ".join(s.cves) if s.cves else "ninguno"
         actors_str   = ", ".join(s.actors) if s.actors else "no identificados"
         affected_str = ", ".join(s.affected_systems) if s.affected_systems else "no especificado"
-        iocs_str     = ", ".join(s.iocs[:PROMPT_IOCS_PER_ARTICLE]) if s.iocs else "ninguno"
+        iocs_str     = ", ".join(s.iocs[:_cap("iocs_per_article")]) if s.iocs else "ninguno"
         runlog.record_drop("analyzer.build_report_prompt.iocs",
-                           shown=min(PROMPT_IOCS_PER_ARTICLE, len(s.iocs)),
+                           shown=min(_cap("iocs_per_article"), len(s.iocs)),
                            total=len(s.iocs), detail=s.title[:40])
         items.append(
             f"[{i}] [{s.severity}] [{s.threat_type}]\n"
@@ -170,18 +227,12 @@ def build_report_prompt(summaries: list[ArticleSummary],
         if omitted else ""
     )
 
-    correlation_block = ""
-    if correlation is not None and correlation.has_signals():
-        correlation_block = f"\n{correlation.format_for_prompt()}\n"
-
-    trending_block = ""
-    if trending is not None and trending.has_data():
-        trending_block = f"\n{trending.format_for_prompt()}\n"
+    ctx_block = _context_blocks(correlation, trending, enrichment, None)
 
     return f"""Fecha del informe: {date_str}
 Total de artículos analizados: {len(summaries)} de {unique_feeds} fuentes
 {pre_analysis}
-{correlation_block}{trending_block}{omitted_note}
+{ctx_block}{omitted_note}
 ARTÍCULOS ANALIZADOS ({len(prompt_summaries)} de {len(summaries)} — top por severidad):
 {chr(10).join(items)}
 
@@ -236,6 +287,7 @@ REGLAS CRÍTICAS:
 - Si las correlaciones verificadas incluyen CVEs marcados como KEV o corroborados por múltiples fuentes, menciónalos explícitamente como confirmados.
 - Evita frases genéricas sin sustancia técnica. Cada sección debe aportar información que un analista SOC pueda usar directamente.
 - Mantén los marcadores ===VULNERABILITY_BRIEFING===, ===THREAT_INTEL_DIGEST=== y ===END=== exactamente como están.
+- {_LIMITS_RULE}
 
 ---
 *Fuentes: {len(summaries)} artículos de {unique_feeds} feeds especializados*
@@ -264,6 +316,18 @@ def _build_options(num_ctx: int, num_predict: int,
     if num_threads > 0:
         options["num_thread"] = num_threads
     return options
+
+
+def _effort_for(phase: str, model: str) -> str | None:
+    """`output_config.effort` de la fase, o None si no corresponde.
+
+    **Haiku 4.5 no acepta `effort`** (400): las fases latam/general y Stage 2
+    corren en Haiku, así que quedan afuera por modelo y no por nombre de fase —
+    si mañana latam pasa a Sonnet, hereda el effort sin tocar esta función."""
+    from separatio import config
+    if "haiku" in (model or "").lower():
+        return None
+    return (getattr(config, "PHASE_EFFORT", {}) or {}).get(phase)
 
 
 def _get_api_key(provider: str) -> str:
@@ -319,10 +383,17 @@ def _llm_chat(
     num_ctx: int = 4096,
     num_threads: int = 0,
     stage: str = "?",
+    output_schema: dict | None = None,
+    effort: str | None = None,
 ) -> str:
     """Llamada LLM unificada para todos los proveedores. Devuelve texto limpio.
 
-    `stage` sólo etiqueta la llamada en el log y el manifiesto (F-H)."""
+    `stage` sólo etiqueta la llamada en el log y el manifiesto (F-H).
+    `output_schema` y `effort` son de la API de Claude (F-I) y se ignoran en el
+    resto de los proveedores: `output_schema` garantiza JSON válido contra el
+    esquema (sólo lo usa Stage 2 — las fases 3 y 4 producen Markdown) y `effort`
+    regula la profundidad de razonamiento. **Haiku 4.5 no acepta `effort`**: el
+    llamador decide, acá sólo se pasa lo que llegue."""
     t0 = time.monotonic()
     if provider == "ollama":
         import ollama
@@ -349,11 +420,20 @@ def _llm_chat(
         client = anthropic.Anthropic(api_key=_get_api_key("claude"))
         # Los modelos Claude actuales (Sonnet 5 / Opus 5 / 4.7+) rechazan los
         # parámetros de sampling (temperature/top_p/top_k) con 400 — se omiten.
+        kwargs: dict = {}
+        output_config: dict = {}
+        if output_schema:
+            output_config["format"] = {"type": "json_schema", "schema": output_schema}
+        if effort:
+            output_config["effort"] = effort
+        if output_config:
+            kwargs["output_config"] = output_config
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],
+            **kwargs,
         )
         _log_usage(provider, response.usage.input_tokens, response.usage.output_tokens,
                    response.stop_reason, max_tokens,
@@ -431,6 +511,14 @@ def summarize_article(
     )
     prompt = build_summary_prompt(title, content, feed_title, feed_category)
 
+    # Salida estructurada sólo donde existe (Claude). Con esquema, el JSON viene
+    # garantizado y el reintento de abajo deja de dispararse: eso es lo que se
+    # verifica en el manifiesto — cero reintentos en una corrida normal.
+    from separatio import config as _cfg
+    schema = (ARTICLE_SUMMARY_SCHEMA
+              if provider == "claude" and getattr(_cfg, "STAGE2_STRUCTURED_OUTPUT", False)
+              else None)
+
     for attempt in range(max_retries + 1):
         try:
             raw = _llm_chat(
@@ -439,6 +527,7 @@ def summarize_article(
                 provider=provider,
                 model=model,
                 stage="stage2",
+                output_schema=schema,
                 max_tokens=max_tokens,
                 temperature=0.1,
                 ollama_host=ollama_host,
@@ -456,10 +545,16 @@ def summarize_article(
             summary.affected_systems = data.get("affected_systems", [])
             summary.summary          = data.get("summary", "")
             summary.iocs             = data.get("iocs", [])
+            # `.get()` con default y no indexación: un modelo sin esquema (o un
+            # proveedor que no lo soporta) puede omitir los campos nuevos.
+            summary.attack_techniques   = data.get("attack_techniques", [])
+            summary.exploitation_status = data.get("exploitation_status", "unknown")
+            summary.confidence          = data.get("confidence", "media")
             summary.severity_score   = _SEVERITY_SCORE.get(summary.severity, 1)
             return summary
 
         except json.JSONDecodeError as e:
+            runlog.bump_count("stage2_reintentos_json")
             if attempt < max_retries:
                 logger.warning(
                     f"JSON inválido para '{title[:50]}', "
@@ -511,9 +606,11 @@ def generate_report(
     max_tokens: int = 3500,
     provider: str = "ollama",
     article_limit: int | None = None,
+    enrichment=None,
 ) -> str:
     sorted_summaries = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    prompt = build_report_prompt(sorted_summaries, date_str, language, correlation, trending, article_limit)
+    prompt = build_report_prompt(sorted_summaries, date_str, language, correlation,
+                                 trending, article_limit, enrichment)
 
     try:
         if provider == "ollama":
@@ -684,28 +781,91 @@ def _format_phase_items(summaries: list[ArticleSummary],
     runlog.record_drop("analyzer._format_phase_items",
                        shown=len(top), total=len(summaries),
                        detail=phase or "fase")
+    cap = _cap("iocs_per_article")
     items = []
     for i, s in enumerate(top, 1):
         cves_str     = ", ".join(s.cves)            if s.cves            else "ninguno"
         actors_str   = ", ".join(s.actors)          if s.actors          else "no identificados"
         affected_str = ", ".join(s.affected_systems) if s.affected_systems else "no especificado"
-        iocs_str     = ", ".join(s.iocs[:PROMPT_IOCS_PER_ARTICLE]) if s.iocs else "ninguno"
+        iocs_str     = ", ".join(s.iocs[:cap]) if s.iocs else "ninguno"
+        # El detalle lleva la fase adelante para que el bloque de cobertura de
+        # F-I pueda declarar sólo los recortes de SU fase y no los de las otras.
         runlog.record_drop("analyzer._format_phase_items.iocs",
-                           shown=min(PROMPT_IOCS_PER_ARTICLE, len(s.iocs)),
-                           total=len(s.iocs), detail=s.title[:40])
+                           shown=min(cap, len(s.iocs)), total=len(s.iocs),
+                           detail=f"{phase or 'fase'}: {s.title[:40]}")
         items.append(
             f"[{i}] [{s.severity}] [{s.threat_type}]\n"
             f"    Título: {s.title}\n"
             f"    Fuente: {s.feed_title} | URL: {s.url}\n"
             f"    CVEs: {cves_str} | Actores: {actors_str}\n"
             f"    Afectados: {affected_str} | IOCs: {iocs_str}\n"
+            f"{_format_extras(s)}"
             f"    Análisis: {s.summary}"
         )
     return top, items
 
 
+_EXPLOIT_LABEL = {
+    "active":  "explotación activa reportada in-the-wild",
+    "poc":     "PoC/exploit público disponible",
+    "none":    "sin explotación conocida",
+    "unknown": "",
+}
+
+
+def _format_extras(s: ArticleSummary) -> str:
+    """Línea de los campos estructurados de F-I. Se omite si no hay nada que
+    decir: un `unknown` sin técnicas no aporta y sí ocupa tokens."""
+    partes = []
+    if s.attack_techniques:
+        partes.append("ATT&CK: " + ", ".join(s.attack_techniques))
+    etiqueta = _EXPLOIT_LABEL.get(getattr(s, "exploitation_status", "") or "", "")
+    if etiqueta:
+        partes.append(f"Explotación: {etiqueta}")
+    if getattr(s, "confidence", "") in ("baja",):
+        partes.append("Confianza de la extracción: BAJA (tratar con cautela)")
+    return f"    {' | '.join(partes)}\n" if partes else ""
+
+
+# Regla común a las cinco salidas: lo que el bloque COBERTURA declara como
+# faltante tiene que llegar al informe. Sin esto el modelo *sabe* lo que le falta
+# pero el lector no, que es exactamente el agujero que F-I viene a tapar.
+_LIMITS_RULE = (
+    "Si el bloque COBERTURA DE ESTA CORRIDA declara faltantes (una fuente caída u "
+    "omitida, artículos recortados o sólo-título), cerrá el informe con una línea "
+    "«**Limitaciones de esta corrida:** …» nombrándolos en una oración. Si no hay "
+    "faltantes declarados, omití esa línea por completo."
+)
+
+
+def _context_blocks(correlation=None, trending=None, enrichment=None,
+                    phase: str | None = None) -> str:
+    """Los bloques de contexto que anteceden al listado de artículos.
+
+    Desde F-I el `enrichment` es un parámetro propio y no viaja de contrabando
+    dentro de `CorrelationContext.extra_blocks`: así llega a las **cuatro**
+    fases sin arrastrar KEV/EPSS a LATAM, que ahí es ruido.
+
+    El bloque de cobertura va **último**, pegado al listado: es lo que el modelo
+    tiene que tener presente al escribir, no un preámbulo que se diluye."""
+    bloques = []
+    if correlation is not None and correlation.has_signals():
+        bloques.append(correlation.format_for_prompt())
+    if enrichment is not None and enrichment.has_signals():
+        bloque = enrichment.format_for_prompt(cap=_cap("verdicts_per_source"))
+        if bloque:
+            bloques.append(bloque)
+    if trending is not None and trending.has_data():
+        bloques.append(trending.format_for_prompt())
+    cobertura = runlog.coverage_block(phase)
+    if cobertura:
+        bloques.append(cobertura)
+    return "\n" + "\n\n".join(bloques) + "\n" if bloques else ""
+
+
 def build_vuln_prompt(summaries: list[ArticleSummary], date_str: str,
-                      correlation=None, article_limit: int | None = 50) -> str:
+                      correlation=None, article_limit: int | None = 50,
+                      enrichment=None) -> str:
     sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
     top, items = _format_phase_items(sorted_s, article_limit, "vulnerability")
 
@@ -713,14 +873,12 @@ def build_vuln_prompt(summaries: list[ArticleSummary], date_str: str,
     sev_line  = " | ".join(f"{s}: {sev_dist[s]}" for s in ["Crítica","Alta","Media","Baja","Informativa"] if sev_dist.get(s))
     cve_cnt   = Counter(cve for s in summaries for cve in s.cves)
     top_cves  = ", ".join(f"{c} ({n}x)" for c, n in cve_cnt.most_common(10)) or "ninguno"
-    corr_block = f"\n{correlation.format_for_prompt()}\n" if correlation and correlation.has_signals() else ""
-    omitted    = len(summaries) - len(top)
-    note       = f"\n(Se muestran {len(top)} artículos de mayor severidad; {omitted} adicionales cubiertos en estadísticas.)\n" if omitted else ""
+    ctx_block = _context_blocks(correlation, None, enrichment, "vulnerability")
 
     return f"""Fecha: {date_str}
 Artículos de vulnerabilidades: {len(summaries)} | Severidad: {sev_line}
 CVEs más mencionados: {top_cves}
-{corr_block}{note}
+{ctx_block}
 ARTÍCULOS:
 {chr(10).join(items)}
 
@@ -741,12 +899,14 @@ Genera el Vulnerability Briefing en español. Usa este formato exacto:
 ## Parches Prioritarios
 (Lista ordenada por urgencia: sistema, CVE, razón específica de prioridad, [Fuente](URL).)
 
-REGLAS: No inventes CVEs ni datos. CVEs en KEV: señálalos explícitamente como confirmados. Usa las URLs exactas del campo URL de cada artículo."""
+REGLAS: No inventes CVEs ni datos. CVEs en KEV: señálalos explícitamente como confirmados. Usa las URLs exactas del campo URL de cada artículo.
+{_LIMITS_RULE}"""
 
 
 def build_threat_prompt(summaries: list[ArticleSummary], date_str: str,
                         correlation=None, trending=None,
-                        article_limit: int | None = 35) -> str:
+                        article_limit: int | None = 35,
+                        enrichment=None) -> str:
     sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
     top, items = _format_phase_items(sorted_s, article_limit, "threat_intel")
 
@@ -754,15 +914,12 @@ def build_threat_prompt(summaries: list[ArticleSummary], date_str: str,
     top_actors = ", ".join(f"{a} ({n}x)" for a, n in actor_cnt.most_common(8)) or "ninguno"
     type_cnt   = Counter(s.threat_type for s in summaries if s.threat_type)
     top_types  = ", ".join(f"{t} ({n})" for t, n in type_cnt.most_common(5))
-    corr_block  = f"\n{correlation.format_for_prompt()}\n" if correlation and correlation.has_signals() else ""
-    trend_block = f"\n{trending.format_for_prompt()}\n"    if trending and trending.has_data()        else ""
-    omitted     = len(summaries) - len(top)
-    note        = f"\n(Se muestran {len(top)} artículos; {omitted} adicionales de menor severidad.)\n" if omitted else ""
+    ctx_block  = _context_blocks(correlation, trending, enrichment, "threat_intel")
 
     return f"""Fecha: {date_str}
 Artículos de threat intel / hacking: {len(summaries)} | Actores activos: {top_actors}
 Tipos dominantes: {top_types}
-{corr_block}{trend_block}{note}
+{ctx_block}
 ARTÍCULOS:
 {chr(10).join(items)}
 
@@ -783,17 +940,21 @@ Genera el Threat Intelligence Digest en español. Usa este formato exacto:
 ## Detección y Respuesta
 (5-7 acciones concretas para SOC/CERT: búsquedas SIEM sugeridas, bloqueos de IOCs, hunting queries basadas en TTPs observados)
 
-REGLAS: No inventes actores ni IOCs. Si hay actores persistentes en trending, señálalos. Incluye fuente para cada IOC."""
+REGLAS: No inventes actores ni IOCs. Si hay actores persistentes en trending, señálalos. Incluye fuente para cada IOC.
+{_LIMITS_RULE}"""
 
 
 def build_latam_prompt(summaries: list[ArticleSummary], date_str: str,
-                       article_limit: int | None = 60) -> str:
+                       article_limit: int | None = 60,
+                       enrichment=None) -> str:
     sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
     top, items = _format_phase_items(sorted_s, article_limit, "latam")
+    # LATAM recibe enrichment pero NO correlación: KEV/EPSS acá es ruido.
+    ctx_block = _context_blocks(None, None, enrichment, "latam")
 
     return f"""Fecha: {date_str}
 Artículos con relevancia LATAM: {len(summaries)}
-
+{ctx_block}
 ARTÍCULOS:
 {chr(10).join(items)}
 
@@ -814,17 +975,20 @@ Genera el análisis regional en español. Usa este formato exacto:
 ## Recomendaciones para Organizaciones LATAM
 (3-5 acciones concretas considerando el contexto regulatorio local y el stack tecnológico predominante en la región)
 
-REGLAS: Sé específico sobre países cuando los datos lo permitan. No extrapoles incidentes globales a LATAM sin justificación. Si hay poco material LATAM directo, es válido indicarlo y enfocarse en las amenazas globales más relevantes para la región."""
+REGLAS: Sé específico sobre países cuando los datos lo permitan. No extrapoles incidentes globales a LATAM sin justificación. Si hay poco material LATAM directo, es válido indicarlo y enfocarse en las amenazas globales más relevantes para la región.
+{_LIMITS_RULE}"""
 
 
 def build_general_prompt(summaries: list[ArticleSummary], date_str: str,
-                         article_limit: int | None = 20) -> str:
+                         article_limit: int | None = 20,
+                         enrichment=None) -> str:
     sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
     _top, items = _format_phase_items(sorted_s, article_limit, "general")
+    ctx_block = _context_blocks(None, None, enrichment, "general")
 
     return f"""Fecha: {date_str}
 Artículos generales de ciberseguridad: {len(summaries)}
-
+{ctx_block}
 ARTÍCULOS:
 {chr(10).join(items)}
 
@@ -839,7 +1003,8 @@ Genera el panorama general en español. Usa este formato exacto:
 ## Tendencias y Contexto de Industria
 (Patrones observados: cambios regulatorios, nuevas técnicas emergentes, movimientos del ecosistema relevantes)
 
-REGLAS: Prioriza noticias con impacto operacional directo sobre noticias corporativas. Sé conciso — este briefing es para dirección."""
+REGLAS: Prioriza noticias con impacto operacional directo sobre noticias corporativas. Sé conciso — este briefing es para dirección.
+{_LIMITS_RULE}"""
 
 
 def build_synthesis_prompt(phase_outputs: dict[str, str], date_str: str,
@@ -862,10 +1027,16 @@ def build_synthesis_prompt(phase_outputs: dict[str, str], date_str: str,
             excerpt += "\n...[ver informe completo de la fase]"
         sections += f"\n--- {label} ---\n{excerpt}\n"
 
+    # La síntesis ve la cobertura de TODA la corrida (phase=None): es el texto
+    # que el usuario lee primero, así que es donde más importa que los faltantes
+    # estén declarados.
+    cobertura = runlog.coverage_block()
+    cobertura = f"\n{cobertura}\n" if cobertura else ""
+
     return f"""Fecha: {date_str}
 Total artículos procesados: {total_articles}
 Fases completadas: {', '.join(phase_outputs.keys())}
-
+{cobertura}
 RESÚMENES ESPECIALIZADOS DE HOY:
 {sections}
 
@@ -886,7 +1057,8 @@ Genera el RESUMEN EJECUTIVO cross-domain en español. Usa este formato exacto:
 ## Recomendación Estratégica
 (1 párrafo para dirección/CISO: tendencia dominante, posicionamiento recomendado, qué vigilar en los próximos 7 días)
 
-REGLAS: NO repitas detalles de los análisis especializados — el lector los tiene disponibles. Enfócate en CONEXIONES y PANORAMA GLOBAL. Si no hay correlaciones claras, indícalo honestamente."""
+REGLAS: NO repitas detalles de los análisis especializados — el lector los tiene disponibles. Enfócate en CONEXIONES y PANORAMA GLOBAL. Si no hay correlaciones claras, indícalo honestamente.
+{_LIMITS_RULE}"""
 
 
 def generate_phase_report(
@@ -905,6 +1077,7 @@ def generate_phase_report(
     article_limit: int | None = None,
     correlation=None,
     trending=None,
+    enrichment=None,
 ) -> str:
     """Genera el informe de una fase especializada (vuln / threat_intel / latam / general)."""
     SYSTEMS = {
@@ -913,11 +1086,18 @@ def generate_phase_report(
         "latam":         LATAM_SYSTEM_PROMPT,
         "general":       GENERAL_SYSTEM_PROMPT,
     }
+    # Cada fase recibe lo que le sirve: correlación (KEV/EPSS) sólo a
+    # vulnerability y threat_intel; **enrichment a las cuatro** (F-I, cambio 3);
+    # trending sólo a threat_intel.
     BUILDERS = {
-        "vulnerability": lambda: build_vuln_prompt(summaries, date_str, correlation, article_limit),
-        "threat_intel":  lambda: build_threat_prompt(summaries, date_str, correlation, trending, article_limit),
-        "latam":         lambda: build_latam_prompt(summaries, date_str, article_limit),
-        "general":       lambda: build_general_prompt(summaries, date_str, article_limit),
+        "vulnerability": lambda: build_vuln_prompt(summaries, date_str, correlation,
+                                                   article_limit, enrichment),
+        "threat_intel":  lambda: build_threat_prompt(summaries, date_str, correlation,
+                                                     trending, article_limit, enrichment),
+        "latam":         lambda: build_latam_prompt(summaries, date_str, article_limit,
+                                                    enrichment),
+        "general":       lambda: build_general_prompt(summaries, date_str, article_limit,
+                                                      enrichment),
     }
     if phase not in SYSTEMS:
         logger.warning(f"Fase desconocida '{phase}' — usando prompt general")
@@ -975,6 +1155,7 @@ def generate_phase_report(
                 thinking=thinking,
                 num_ctx=num_ctx,
                 num_threads=num_threads,
+                effort=_effort_for(phase, model),
             )
             logger.info(f"  [{phase}] Generado ({provider})")
             return result
@@ -1013,6 +1194,7 @@ def generate_synthesis_report(
             thinking=thinking,
             num_ctx=num_ctx,
             num_threads=num_threads,
+            effort=_effort_for("synthesis", model),
         )
         logger.info(f"  [synthesis] Generado ({provider})")
         return result

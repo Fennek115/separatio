@@ -58,6 +58,11 @@ class CorrelationContext:
     epss_scores: dict[str, dict] = field(default_factory=dict)
     # IOC -> feeds donde se mencionó (solo IOCs en ≥2 fuentes distintas)
     corroborated_iocs: dict[str, list[str]] = field(default_factory=dict)
+    # Técnica ATT&CK -> feeds (solo en ≥2 fuentes). Mismo patrón que los CVEs:
+    # "T1566 mencionada por 4 medios distintos hoy" es un hecho verificable, no
+    # una inferencia. Depende de `attack_techniques`, campo nuevo de F-I: con un
+    # caché viejo el dict queda vacío y no se imprime nada.
+    corroborated_techniques: dict[str, list[str]] = field(default_factory=dict)
 
     kev_fetch_ok: bool = False
     epss_fetch_ok: bool = False
@@ -72,7 +77,8 @@ class CorrelationContext:
         return bool(
             self.corroborated_cves or self.kev_active_cves
             or self.poc_available_cves or self.trending_actors
-            or self.corroborated_iocs or self.extra_blocks
+            or self.corroborated_iocs or self.corroborated_techniques
+            or self.extra_blocks
         )
 
     def format_for_prompt(self) -> str:
@@ -119,6 +125,11 @@ class CorrelationContext:
             for ioc, feeds in list(self.corroborated_iocs.items())[:20]:
                 lines.append(f"      {ioc} → {' | '.join(feeds[:4])}")
 
+        if self.corroborated_techniques:
+            lines.append("  TÉCNICAS ATT&CK CORROBORADAS en >=2 fuentes independientes:")
+            for tech, feeds in list(self.corroborated_techniques.items())[:15]:
+                lines.append(f"      {tech} ({len(set(feeds))} fuentes) → {' | '.join(feeds[:4])}")
+
         lines += [
             "",
             "REGLA: Usa estas correlaciones como hechos verificados en el informe.",
@@ -156,6 +167,18 @@ def _normalize_ioc(raw: str) -> str:
     ioc = re.sub(r"\[dot\]", ".", ioc, flags=re.IGNORECASE)
     ioc = re.sub(r"^hxxps?://", lambda m: m.group().replace("hxx", "htt"), ioc, flags=re.IGNORECASE)
     return ioc.lower()
+
+
+_TECHNIQUE_RE = re.compile(r"^T\d{4}(\.\d{3})?$")
+
+
+def _normalize_technique(raw: str) -> str:
+    """`t1566.001 — Phishing` → `T1566.001`. Devuelve "" si no es un ID válido:
+    el modelo a veces escribe el nombre de la técnica en vez del ID, y un nombre
+    no cruza entre fuentes."""
+    tech = (raw or "").strip().upper()
+    tech = re.split(r"[\s:—–-]", tech, maxsplit=1)[0].strip()
+    return tech if _TECHNIQUE_RE.match(tech) else ""
 
 
 def _dedup(items: list[str]) -> list[str]:
@@ -227,6 +250,19 @@ def build_correlation_context(
         if len(set(feeds)) >= 2
     }
 
+    # ── Técnicas ATT&CK (F-I) ────────────────────────────
+    tech_map: dict[str, list[str]] = defaultdict(list)
+    for s in summaries:
+        for raw_tech in getattr(s, "attack_techniques", None) or []:
+            tech = _normalize_technique(raw_tech)
+            if tech:
+                tech_map[tech].append(s.feed_title)
+    ctx.corroborated_techniques = {
+        tech: _dedup(feeds)
+        for tech, feeds in tech_map.items()
+        if len(set(feeds)) >= 2
+    }
+
     # ── CISA KEV lookup ──────────────────────────────────
     logger.info("  Consultando CISA KEV...")
     try:
@@ -283,6 +319,7 @@ def build_correlation_context(
         f"{len(ctx.corroborated_cves)} corroborados | "
         f"{len(ctx.poc_available_cves)} con PoC | "
         f"{len(ctx.trending_actors)} actores en tendencia | "
-        f"{len(ctx.corroborated_iocs)} IOCs corroborados"
+        f"{len(ctx.corroborated_iocs)} IOCs corroborados | "
+        f"{len(ctx.corroborated_techniques)} técnicas ATT&CK corroboradas"
     )
     return ctx

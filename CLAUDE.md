@@ -24,24 +24,28 @@ código, el punto de entrada es **`docs/REWORK-ESTADO.md`** (tabla de estado, pr
 prompt de arranque), no este archivo. El diseño está en `docs/PLAN-REWORK.md` y el detalle de cada
 fase en `docs/fases/`.
 
-**Fase activa: F-I (afinado de prompts).** F-A (higiene de la entrada) y **F-H (observabilidad de
-la corrida)** quedaron **hechas el 2026-08-09**. Las fases están **planificadas al detalle** (DDL,
-firmas, tests, comandos): una sesión ejecuta y documenta, no rediseña. Orden: **F-I** → F-B1 → F-B2
-→ F-E → F-C → F-D, con F-F bloqueada por corpus y F-G en paralelo.
+**Fase activa: F-B1 (store: esquema y capa de acceso).** F-A (higiene de la entrada), **F-H
+(observabilidad de la corrida)** y **F-I (afinado de prompts)** quedaron **hechas el 2026-08-09**.
+Las fases están **planificadas al detalle** (DDL, firmas, tests, comandos): una sesión ejecuta y
+documenta, no rediseña. Orden: **F-B1** → F-B2 → F-E → F-C → F-D, con F-F bloqueada por corpus y
+F-G en paralelo.
 
-F-I sigue a F-H porque ahora el manifiesto **ya sabe qué se recortó** — falta que el modelo lo sepa
-también. F-H dejó medidos diez puntos de descarte silencioso, entre ellos que el enrichment nunca
-llega a las fases `latam` y `general` (`pipeline.py`, `ENRICHED_PHASES`): eso hoy se declara en el
-manifiesto y **todavía no en el informe**.
+Lo que dejó F-I y conviene saber antes de tocar prompts: el informe **declara sus propios
+faltantes** (`runlog.coverage_block()` arma el bloque COBERTURA desde el manifiesto de F-H y cada
+fase cierra con una línea "Limitaciones de esta corrida"), los topes de prompt viven todos en
+`config.PROMPT_CAPS`, y el **enrichment llega a las cuatro fases** — `ENRICHED_PHASES` ya no existe;
+lo que se sigue reservando a vulnerability/threat_intel es la correlación KEV/EPSS
+(`pipeline.CORRELATED_PHASES`). Hallazgo de la sesión: darle el dato al modelo no alcanza, hay que
+**pedirle explícitamente que lo escriba** — con el bloque pero sin la regla, lo sabía y se lo callaba.
 
 ## Layout
 
 | Qué | Detalle |
 |---|---|
 | `pyproject.toml` | Paquetes `separatio` (+`separatio.enrichers`) e `ipcheck`. Entry points: `separatio`, `separatio-check`, `ipcheck`, `ipcheck-run`. Venv en `./venv/` (raíz) con `pip install -e '.[dev]'` |
-| `separatio/` | El pipeline (4 etapas + enriquecimiento). Detalle técnico y estado fino en su `CLAUDE.md`. Enrichers (F2, 2026-08-08): IPsum, OpenPhish, ipcheck, **Ransomware.live** (1 llamada/run, sin reintentos ante 429 — ToS; nunca guardar `screenshot`/`claim_url`) y **onion-lookup** (CIRCL, solo si hay `.onion` entre los IOCs). **Honeypot (F3, capa 4)**: `enrichers/honeypot.py` lee `data/honeypot/attackers.json` (del colector `tools/pull_honeypot.sh`) — toggle `honeypot` en OFF hasta que el pull traiga dato real. **Desde F-A (2026-08-09):** `hygiene.py` (clasifica IPs en propia / escáner / desconocida) y `honeypot_collector.py` (el consolidador del honeypot, que salió del heredoc de `tools/pull_honeypot.sh` para poder testearse). **Desde F-H (2026-08-09):** `runlog.py` — el manifiesto de la corrida (singleton de módulo con no-op, como el `logger`): registra recortes con `shown`/`total`, tokens por llamada, fuentes caídas u **omitidas**, y calcula `status` (ok/degraded/failed) y exit code |
+| `separatio/` | El pipeline (4 etapas + enriquecimiento). Detalle técnico y estado fino en su `CLAUDE.md`. Enrichers (F2, 2026-08-08): IPsum, OpenPhish, ipcheck, **Ransomware.live** (1 llamada/run, sin reintentos ante 429 — ToS; nunca guardar `screenshot`/`claim_url`) y **onion-lookup** (CIRCL, solo si hay `.onion` entre los IOCs). **Honeypot (F3, capa 4)**: `enrichers/honeypot.py` lee `data/honeypot/attackers.json` (del colector `tools/pull_honeypot.sh`) — toggle `honeypot` en OFF hasta que el pull traiga dato real. **Desde F-A (2026-08-09):** `hygiene.py` (clasifica IPs en propia / escáner / desconocida) y `honeypot_collector.py` (el consolidador del honeypot, que salió del heredoc de `tools/pull_honeypot.sh` para poder testearse). **Desde F-H (2026-08-09):** `runlog.py` — el manifiesto de la corrida (singleton de módulo con no-op, como el `logger`): registra recortes con `shown`/`total`, tokens por llamada, fuentes caídas u **omitidas**, y calcula `status` (ok/degraded/failed) y exit code. **Desde F-I (2026-08-09):** `runlog.coverage_block(phase)` (el bloque COBERTURA que se inyecta en los cinco prompts), `config.PROMPT_CAPS`/`PHASE_EFFORT`, salida estructurada en Stage 2 (`ARTICLE_SUMMARY_SCHEMA`) y tres campos nuevos en `ArticleSummary` (`attack_techniques`, `exploitation_status`, `confidence`) |
 | `ipcheck/` | Librería (`ip_enricher.py`) + CLI de reputación de IPs. Su `CLAUDE.md` tiene el detalle. El enricher `ip_reputation` la importa como paquete (`from ipcheck import ip_enricher`) — `IPCHECK_DIR` y el `sys.path.insert` murieron |
-| `tests/` | Los **94** tests de ambos paquetes: `venv/bin/pytest tests/ -q` (sin red). 42 previos + 31 de F-A + 21 de F-H |
+| `tests/` | Los **115** tests de ambos paquetes: `venv/bin/pytest tests/ -q` (sin red). 42 previos + 31 de F-A + 21 de F-H + 21 de F-I |
 | `.env` | **EL ÚNICO** — 13 variables, gitignored (el repo es público). Espejo documentado en `.env.example` (commiteado). Lo cargan solo los entry points; las librerías leen `os.environ`. ⚠️ `ANTHROPIC_API_KEY` es **temporal** (puesta 2026-08-08, caduca en días) — reemplazar por la definitiva |
 | `feeds/feeds.opml` | Espejo curado de Miniflux (CT 112, `192.168.1.7:8080`): 40 feeds, 0 errores, bajo el usuario `threat_intel` (id 12, **no** `admin`), LATAM con 6. Verificado por API 2026-08-08 |
 | `.mcp.json` | MCP de investigación manual (F2): HIBP hosted + AbuseIPDB por `uvx` (la key sale del `.env` al lanzar; nada secreto commiteado). Solo para sesiones en esta carpeta — **nunca** en el cron |
@@ -57,7 +61,7 @@ venv/bin/separatio --report-only  # regenerar informe desde el caché del día
 venv/bin/separatio --last-run     # ¿cómo salió la última corrida? (F-H; --json = manifiesto crudo)
 venv/bin/separatio-check          # diagnóstico de entorno (carga el .env)
 venv/bin/ipcheck archivo.txt      # checker de IPs de consola (uso suelto preservado)
-venv/bin/pytest tests/ -q         # 94 tests, sin red
+venv/bin/pytest tests/ -q         # 115 tests, sin red
 ```
 
 ## Incidente 2026-08-08 (aprendizaje)
@@ -80,11 +84,12 @@ desmontaron — las pruebas van en contenedores).
 
 ## Pendiente (en orden)
 
-0. ⚠️ **Desplegar F-A + F-H al CT 113** (2026-08-09): el mismo `git pull` lleva las dos. El
+0. ⚠️ **Desplegar F-A + F-H + F-I al CT 113** (2026-08-09): el mismo `git pull` lleva las tres. El
    colector del CT corre cada 6 h con la versión **vieja** y sigue metiendo la IP de casa como
-   atacante; y sin F-H el informe diario sigue sin manifiesto. Falta commit+push, `git pull` en
-   `/opt/intel/app` y agregar `OWN_IPS=` a `/etc/intel/intel.env`. Comandos exactos en
-   `docs/fases/F-A.md` §Pendientes.
+   atacante; sin F-H el informe diario sigue sin manifiesto; y sin F-I sigue sin declarar lo que le
+   falta. Falta commit+push, `git pull` en `/opt/intel/app` y agregar `OWN_IPS=` a
+   `/etc/intel/intel.env` (F-I no trae variables nuevas). Comandos exactos en `docs/fases/F-A.md`
+   §Pendientes. Después de F-I el informe del CT crece ~9 % y cuesta ~$0,09 más por corrida.
 1. ⚠️ **`ANTHROPIC_API_KEY` definitiva** (la del CT es la temporal de prueba; el usuario decidió
    esperar a que termine la etapa de pruebas). Cambiarla = editar una línea de
    `/etc/intel/intel.env` en el CT 113.

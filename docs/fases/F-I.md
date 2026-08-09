@@ -1,9 +1,9 @@
 # F-I · Afinado de prompts: sacarle todo a lo que ya se le pasa
 
-> Estado: **☐ pendiente — sesión 2** · Depende de: **F-H** (el manifiesto alimenta el prompt)
+> Estado: **☑ HECHA el 2026-08-09** · Depende de: **F-H** (el manifiesto alimenta el prompt)
 > Índice: [`../REWORK-ESTADO.md`](../REWORK-ESTADO.md)
 >
-> **Completamente especificada. Ejecutar y documentar.**
+> Los seis pasos se ejecutaron tal como estaban escritos. Salida real en [§As-built](#as-built).
 
 ## Objetivo
 
@@ -13,12 +13,16 @@ Que el LLM aproveche todo lo que el pipeline ya recolecta — y que **sepa lo qu
 
 ```bash
 cd ~/Projects/Intel
-grep -n "COBERTURA\|cobertura" separatio/analyzer.py || echo "→ los prompts no declaran faltantes"
-grep -n "PROMPT_CAPS" separatio/config.py || echo "→ los topes siguen hardcodeados"
-grep -n "correlation if phase in" separatio/pipeline.py   # si sigue, latam/general no ven enrichment
-grep -n "output_config\|attack_techniques" separatio/analyzer.py || echo "→ sin salida estructurada ni campos nuevos"
-ls separatio/reports/ab/ 2>/dev/null || echo "→ sin comparación A/B"
+grep -n "def coverage_block" separatio/runlog.py   || echo "→ los prompts no declaran faltantes"
+grep -n "PROMPT_CAPS" separatio/config.py          || echo "→ los topes siguen hardcodeados"
+grep -n "enrichment=enrichment" separatio/pipeline.py || echo "→ latam/general no ven enrichment"
+grep -n "ARTICLE_SUMMARY_SCHEMA" separatio/analyzer.py || echo "→ sin salida estructurada"
+venv/bin/pytest tests/test_analyzer_prompts.py -q  || echo "→ los tests de la fase no existen o fallan"
 ```
+
+**Respuesta al 2026-08-09 (cierre):** las cinco líneas responden que sí. La fase está hecha; el
+A/B vivió en el scratchpad de la sesión, no en el repo (`separatio/reports/` está gitignored y los
+informes del día se regeneran) — los números están abajo, en el as-built.
 
 ## Contexto mínimo
 
@@ -72,13 +76,19 @@ Todos a `config.py`, en un solo lugar:
 
 ```python
 PROMPT_CAPS = {
-    "verdicts_per_source":   60,   # era 25 hardcodeado (enrichment.py:130)
-    "iocs_per_article":      20,   # era 8  hardcodeado (analyzer.py:649)
-    "trending_actors":       12,   # era 8  (history.py:60)
-    "trending_cves":         10,   # era 6  (history.py:69)
-    "honeypot_notes":        10,   # ya era config (HONEYPOT_MAX_NOTES)
+    "verdicts_per_source":  60,   # era 25 (config.ENRICH_PROMPT_MAX_PER_SOURCE)
+    "iocs_per_article":     20,   # era 8  hardcodeado en analyzer.py
+    "trending_actors":      12,   # era 8  hardcodeado en history.py
+    "trending_new_actors":  12,   # era 8  hardcodeado en history.py
+    "trending_cves":        10,   # era 6  hardcodeado en history.py
+    "trending_deltas":       8,   # era 5  hardcodeado en history.py
 }
 ```
+
+*(As-built: quedó así. `honeypot_notes` **no** entró — `HONEYPOT_MAX_NOTES` ya vivía en `config.py`
+y moverlo sólo habría roto el call site del enricher sin ganar nada. En cambio aparecieron dos topes
+del bloque de trending que el plan no había listado, `trending_new_actors` y `trending_deltas`,
+igual de hardcodeados que los otros.)*
 
 **El método, no el número.** Los valores de arriba son un punto de partida; la fase los fija
 midiendo con el manifiesto de F-H: correr con los topes viejos y con los nuevos sobre el mismo
@@ -249,10 +259,116 @@ Los cuatro puntos, con los dos informes citados, van al as-built.
 
 ## As-built
 
-*(vacío hasta el cierre — los dos informes del A/B, el bloque de cobertura real y el delta de tokens
-en dólares)*
+Ejecutada el **2026-08-09**. 115 tests (94 + 21 nuevos en `tests/test_analyzer_prompts.py`).
+
+### El bloque de cobertura, real
+
+Salida literal de `runlog.coverage_block("general")` sobre el manifiesto de la corrida del A/B:
+
+```
+COBERTURA DE ESTA CORRIDA
+(lo que este análisis SÍ y NO tiene — no afirmes con confianza sobre lo que falta):
+  · Artículos: 120 cargados del caché del día (no se volvió a consultar Miniflux).
+  · Enrichment: 6 fuentes OK (IPsum, MalwareBazaar, OpenPhish, Ransomware.live, ipcheck, onion-lookup).
+  · Se muestran 20 de 54 artículos de la fase 'general' (los de mayor severidad); los 34 restantes no están en el listado.
+
+REGLA: si una fuente falló o se omitió, NO afirmes ausencia de esa clase de amenaza — decí que no
+se pudo verificar. Si hubo recortes, no presentes el listado como exhaustivo.
+```
+
+El bloque es **por fase**: el de `latam` sale sin la línea del recorte de `general` (ese recorte no
+cambia nada de lo que LATAM tiene que escribir). La síntesis lo pide sin fase y ve todo.
+
+### A/B sobre el mismo caché — los cuatro puntos
+
+Línea base: la corrida `--report-only` de las 04:59 del 2026-08-09, con el código anterior
+(su manifiesto todavía trae la clave vieja `pipeline.stage3_phases.enrichment`). Comparación:
+misma caché de 120 resúmenes, mismos modelos, mismos `PHASE_MAX_TOKENS`.
+
+**1. ¿Aparece el bloque de cobertura y es correcto?** Sí, y el informe lo declara: **cinco** líneas
+`**Limitaciones de esta corrida:**`, una por fase más la síntesis. Antes: **cero**. La del panorama
+general cita el número exacto del manifiesto:
+
+> **Limitaciones de esta corrida:** Se muestran 20 de 54 artículos del pool "general"; se omitieron
+> 34 artículos de severidad inferior. […] no se verificó cobertura completa de phishing/C2 externos.
+
+**2. ¿El informe usa datos que antes no llegaban?** Sí, por los dos caminos:
+
+- *Tope de IOCs 8 → 20*: de los 8 IOCs que el tope viejo dejaba fuera, aparecen ahora en el informe
+  `setupsso[.]com` e `idokta[.]com` (dominios de la campaña de vishing de UNC6671) y la wallet
+  `0xE1f2395ee43e45A1556EC6438a88c31B83493103` del gusano ChainDrop. Ninguno estaba en el informe viejo.
+- *Enrichment a las cuatro fases*: LATAM menciona a **Qilin** (viene de las notas de Ransomware.live,
+  que antes no veía) y el panorama general cita **IPsum, ipcheck y MalwareBazaar** por nombre. En el
+  informe viejo, las dos secciones tenían **cero** menciones de enrichment externo.
+
+**3. ¿Cuánto subió la entrada?**
+
+| | llamadas | in | out | coste (lista) | coste (intro Sonnet 5) |
+|---|---|---|---|---|---|
+| antes    | 5 | 52.897 | 21.076 | $0,4251 | $0,3245 |
+| después  | 5 | 56.696 | 26.732 | $0,5190 | $0,3940 |
+| **Δ**    | — | **+3.799** | **+5.656** | **+$0,0939 (+22 %)** | +$0,0695 |
+
+**El delta es mayormente de salida, no de entrada**: el prompt creció 3.799 tokens (+7 %) y la
+respuesta 5.656 (+27 %) — se paga más porque el modelo *escribe* más con el material nuevo, no
+porque el contexto sea más caro. Proyectado: **+$2,82 al mes** con una corrida diaria. Ninguna fase
+se acercó a truncar (`vulnerability` 76 % del límite, el resto ≤73 %, las cinco `finish=end_turn`).
+
+**4. ¿Empeoró algo?** No. Por sección: Vulnerability +316 palabras, LATAM +183 (las dos que
+recibieron datos nuevos), Threat Intel −93 y General −41 (más cortas, no más largas). Repetición:
+2 coincidencias sobre 274 frases contra 0 sobre 249 — las dos son la misma celda de URL repetida en
+tres filas de una tabla, no prosa duplicada.
+
+### Salida estructurada de Stage 2 (criterio 4)
+
+Verificada contra la API con dos artículos de prueba (`scratchpad/check_stage2.py`), sin tocar el
+informe del día. Haiku 4.5 acepta `output_config.format` y extrae bien los tres campos nuevos:
+
+```
+  Critical RCE in Acme VPN exploited in the wild (CVE-2026-4242)
+    attack_techniques   : ['T1566.001', 'T1078']
+    exploitation_status : active          confidence: alta
+  Weekly roundup: security industry news
+    attack_techniques   : []
+    exploitation_status : none            confidence: alta
+
+  reintentos de JSON en Stage 2: 0
+```
+
+El contador `stage2_reintentos_json` es nuevo (`runlog.bump_count`): es el número que hace
+auditable el criterio 4 en cada corrida real, sin leer el log.
+
+### Lo que el documento no preveía
+
+1. **`--report-only` no puede verificar el criterio 4**: salta Stage 2 por definición. Se verificó
+   con un script aparte contra la API en vez de gastar una corrida completa.
+2. **Etiqueta equivocada en el manifiesto de F-H** (`extractor.truncate_text`): el drop cuenta
+   *caracteres*, no artículos, y el resumen del dry-run informaba "33245 artículos truncados" sobre
+   81 artículos. Corregida en `DROP_LABELS` al verla en una corrida real.
+3. **`effort` se decide por modelo, no por nombre de fase** (`analyzer._effort_for`): Haiku 4.5
+   devuelve 400 si se le pasa `effort`, y `latam`/`general` corren en Haiku *hoy*. Filtrar por
+   `"haiku" in model` hace que si mañana una de esas fases pasa a Sonnet herede el effort sola.
+4. **La regla de declarar faltantes tiene que estar en el prompt aunque no haya faltantes.** El
+   bloque de cobertura se omite si la corrida está limpia, pero `_LIMITS_RULE` va siempre (dice
+   explícitamente "si no hay faltantes declarados, omití esa línea"). Sin eso el modelo sabía lo que
+   le faltaba y no lo escribía: el criterio 1 no se cumplía.
+5. **`ENRICHED_PHASES` pasó a llamarse `CORRELATED_PHASES`** en `pipeline.py`: con el enrichment
+   yendo a las cuatro fases, el nombre viejo mentía. La constante ahora es sólo de correlación
+   KEV/EPSS, y el drop asociado también (`pipeline.stage3_phases.correlation`).
 
 ## Pendientes que deja
 
-*(a completar. Previsible: decidir si `effort: "medium"` queda en producción según lo que muestre el
-A/B, y si el esquema de Stage 2 se extiende a más campos una vez que se vea qué extrae bien)*
+1. **Decidir si `effort: "medium"` entra en producción.** F-I dejó `PHASE_EFFORT` en `high` (el
+   default de siempre, sin cambio de conducta) y la palanca cableada y testeada. El A/B midió el
+   efecto de los *prompts*, no el del effort: medirlo es cambiar tres valores en `config.py` y
+   repetir el `--report-only`. Con la salida siendo el 70 % del coste, es la palanca con más
+   recorrido que queda.
+2. **Los campos nuevos todavía no se trendean.** `correlator` ya corrobora técnicas ATT&CK entre
+   fuentes; falta que `history.py` las meta en la ventana de 14 días como hace con actores y CVEs.
+   Necesita días de corridas con el campo poblado — hoy el caché histórico no lo tiene.
+3. **`exploitation_status` es material de triage, no sólo de prompt.** Cuando exista el store (F-B1)
+   es un candidato natural a columna: "CVEs con `active` que además volvieron N días".
+4. **Vigilar `PHASE_MAX_TOKENS["vulnerability"]`**: 12.198 de 16.000 (76 %) es el más ajustado. Si
+   un día de muchos CVEs lo hace truncar, el manifiesto lo va a decir (`finish=max_tokens`,
+   status `degraded`) — no hay que adelantarse, pero hay que mirarlo.
+5. **Desplegar al CT 113** junto con F-A y F-H (el mismo `git pull`).

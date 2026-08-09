@@ -56,14 +56,31 @@ DROP_LABELS: dict[str, str] = {
     "analyzer._format_phase_items.iocs":   "IOCs recortados por el tope por artículo",
     "analyzer.build_report_prompt.iocs":   "IOCs recortados en el informe consolidado",
     "history.format_for_prompt":           "líneas de contexto histórico recortadas",
-    "extractor.truncate_text":             "artículos truncados por ARTICLE_MAX_TOKENS",
+    # Ojo: este drop cuenta CARACTERES recortados, no artículos (`shown`/`total`
+    # son longitudes de texto). La etiqueta vieja decía "artículos truncados" y
+    # el resumen de una corrida real informaba "33245 artículos truncados" sobre
+    # 81 artículos. Corregido al ejecutar F-I, verificando contra la máquina.
+    "extractor.truncate_text":             "caracteres recortados al truncar artículos (ARTICLE_MAX_TOKENS)",
     "extractor.extract_article_text":      "artículos entraron sólo con el título, sin cuerpo",
     "pipeline.stage1_fetch.per_feed":      "artículos descartados por el tope por feed",
     "pipeline.stage1_fetch.global":        "artículos descartados por MAX_ARTICLES",
     "pipeline.stage2_summarize":           "artículos sin resumen utilizable",
-    "pipeline.stage3_phases.enrichment":   "fases que NO reciben enrichment, por diseño actual",
+    "pipeline.stage3_phases.correlation":  "fases que NO reciben correlación KEV/EPSS, por diseño",
     "enrichers.honeypot.notes":            "atacantes del honeypot no listados en el prompt",
     "enrichers.honeypot.uris":             "URIs señuelo recortadas",
+}
+
+# Qué clase de amenaza cubre cada fuente. Si la fuente cayó (o se omitió por
+# falta de key), el informe NO puede afirmar ausencia de esa clase — a lo sumo
+# que no se pudo verificar. Ése es el uso concreto del bloque de cobertura.
+SOURCE_COVERAGE: dict[str, str] = {
+    "IPsum":           "reputación de IPs en blocklists agregadas",
+    "OpenPhish":       "phishing (URLs y dominios)",
+    "ipcheck":         "reputación de IPs por API (AbuseIPDB/VT/OTX/URLhaus…)",
+    "Ransomware.live": "víctimas nuevas en leak sites de ransomware",
+    "onion-lookup":    "metadatos de servicios .onion",
+    "Honeypot":        "actividad observada en el honeypot propio",
+    "MalwareBazaar":   "familias de malware por hash",
 }
 
 
@@ -285,6 +302,15 @@ def record_count(name: str, value: int) -> None:
     _current.counts[name] = value
 
 
+def bump_count(name: str, delta: int = 1) -> None:
+    """Contador acumulativo. Lo usa Stage 2 para los reintentos por JSON
+    inválido: con salida estructurada (F-I) tiene que quedar en cero, y ése es
+    el número que prueba que el esquema sirvió."""
+    if _current is None:
+        return
+    _current.counts[name] = _current.counts.get(name, 0) + delta
+
+
 def record_source(name: str, status: str) -> None:
     """enricher -> 'ok' | 'failed: <motivo>' | 'skipped: <motivo>'.
 
@@ -460,6 +486,125 @@ def _summary_text(m: RunManifest) -> str:
 
     lines.append(_RULE)
     return "\n".join(lines)
+
+
+def coverage_block(phase: str | None = None) -> str:
+    """El bloque COBERTURA DE ESTA CORRIDA que se inyecta en los prompts (F-I).
+
+    F-H dejó medido qué se recortó y qué fuente no contestó; hasta F-I eso vivía
+    sólo en el manifiesto. El modelo escribía el informe **sin saber lo que le
+    faltaba**, y entonces podía decir "no se observó actividad de phishing"
+    cuando lo cierto era que nadie miró: OpenPhish estaba caído.
+
+    `phase` acota los recortes de artículos/IOCs a los de esa fase; los hechos
+    globales (fuentes caídas, artículos sólo-título, truncados) van siempre.
+    Devuelve "" si no hay nada que declarar — una corrida limpia no mete ruido.
+    """
+    m = current()
+    if not m:
+        return ""
+
+    hechos: list[str] = []
+    hechos += _coverage_articles(m)
+    hechos += _coverage_sources(m)
+    hechos += _coverage_drops(m, phase)
+    if not hechos:
+        return ""
+
+    return "\n".join([
+        "COBERTURA DE ESTA CORRIDA",
+        "(lo que este análisis SÍ y NO tiene — no afirmes con confianza sobre lo que falta):",
+        *(f"  · {h}" for h in hechos),
+        "",
+        "REGLA: si una fuente falló o se omitió, NO afirmes ausencia de esa clase de "
+        "amenaza — decí que no se pudo verificar. Si hubo recortes, no presentes el "
+        "listado como exhaustivo.",
+    ])
+
+
+def _coverage_articles(m) -> list[str]:
+    """Cuántos artículos llegaron enteros al modelo, y cuántos no."""
+    out: list[str] = []
+    c = m.counts
+    resumidos = c.get("articulos_resumidos")
+    tomados   = c.get("articulos_tomados")
+    if resumidos is not None and tomados:
+        cola = ""
+        fallidos = c.get("articulos_fallidos") or 0
+        if fallidos:
+            cola = f" {fallidos} fallaron en la extracción y no aportan datos."
+        out.append(f"Artículos: {resumidos} de {tomados} resumidos.{cola}")
+    elif c.get("articulos_cache"):
+        out.append(f"Artículos: {c['articulos_cache']} cargados del caché del día "
+                   f"(no se volvió a consultar Miniflux).")
+
+    solo_titulo = _omitted_for(m, "extractor.extract_article_text")
+    if solo_titulo:
+        out.append(f"{solo_titulo} artículos entraron sólo con el título: no se pudo "
+                   f"bajar el cuerpo, su análisis es superficial por construcción.")
+
+    truncados = len([d for d in m.drops if d.where == "extractor.truncate_text"])
+    if truncados:
+        out.append(f"{truncados} artículos entraron con el cuerpo truncado.")
+    return out
+
+
+def _coverage_sources(m) -> list[str]:
+    """Fuentes de enrichment: cuáles contestaron y cuáles no."""
+    if not m.sources:
+        return []
+    out: list[str] = []
+    ok = [n for n, v in m.sources.items() if v == "ok"]
+    malas = [(n, str(v)) for n, v in m.sources.items() if v != "ok"]
+    if ok:
+        out.append(f"Enrichment: {len(ok)} fuentes OK ({', '.join(sorted(ok))}).")
+    for name, motivo in malas:
+        verbo = "OMITIDA" if motivo.startswith("skipped") else "FALLÓ"
+        que = SOURCE_COVERAGE.get(name)
+        cobertura = f" → la cobertura de {que} es PARCIAL." if que else "."
+        razon = motivo.removeprefix("failed: ").removeprefix("skipped: ")
+        out.append(f"{verbo} {name} ({razon}){cobertura}")
+    return out
+
+
+def _coverage_drops(m, phase: str | None) -> list[str]:
+    """Recortes que afectan a este prompt, con los números reales."""
+    out: list[str] = []
+
+    arts = [d for d in m.drops
+            if d.where == "analyzer._format_phase_items"
+            and (phase is None or d.detail == phase)]
+    for d in arts:
+        out.append(f"Se muestran {d.shown} de {d.total} artículos de la fase "
+                   f"'{d.detail or 'consolidado'}' (los de mayor severidad); "
+                   f"los {d.omitted} restantes no están en el listado.")
+
+    iocs = [d for d in m.drops
+            if d.where.endswith("_format_phase_items.iocs")
+            and (phase is None or d.detail.startswith(f"{phase}:"))]
+    if iocs:
+        out.append(f"{sum(d.omitted for d in iocs)} IOCs de "
+                   f"{len(iocs)} artículos quedaron fuera por el tope por artículo.")
+
+    verdicts = _omitted_for(m, "enrichment.format_for_prompt")
+    if verdicts:
+        out.append(f"{verdicts} veredictos de reputación quedaron fuera del prompt "
+                   f"por tope de tamaño.")
+
+    hist = _omitted_for(m, "history.format_for_prompt")
+    if hist:
+        out.append(f"{hist} líneas de contexto histórico (actores/CVEs recurrentes) "
+                   f"quedaron fuera por tope.")
+
+    perdidos = _omitted_for(m, "pipeline.stage2_summarize")
+    if perdidos:
+        out.append(f"{perdidos} artículos no tienen resumen utilizable y no entran "
+                   f"en ninguna fase.")
+    return out
+
+
+def _omitted_for(m, where: str) -> int:
+    return sum(d.omitted for d in m.drops if d.where == where)
 
 
 def _drop_lines(drops: list[Drop]) -> list[str]:

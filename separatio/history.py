@@ -30,10 +30,22 @@ logger = logging.getLogger(__name__)
 
 
 def _drop(que: str, shown: int, total: int) -> None:
-    """El bloque de trending recorta a 8 actores / 6 CVEs / 5 deltas. Es un
-    recorte razonable (el prompt no puede crecer sin límite) pero hasta F-H era
+    """El bloque de trending recorta actores / CVEs / deltas. Es un recorte
+    razonable (el prompt no puede crecer sin límite) pero hasta F-H era
     invisible: nadie sabía si se habían omitido 2 actores o 200."""
     runlog.record_drop("history.format_for_prompt", shown=shown, total=total, detail=que)
+
+
+# Topes del bloque de trending. Hasta F-I eran 8/8/6/5 hardcodeados acá; ahora
+# viven en config.PROMPT_CAPS con el resto, y se leen en cada llamada.
+_CAP_DEFAULTS = {"trending_actors": 12, "trending_new_actors": 12,
+                 "trending_cves": 10, "trending_deltas": 8}
+
+
+def _cap(name: str) -> int:
+    from separatio import config
+    caps = getattr(config, "PROMPT_CAPS", {}) or {}
+    return int(caps.get(name, _CAP_DEFAULTS[name]))
 
 
 # ─────────────────────────────────────────────────────────
@@ -66,29 +78,33 @@ class TrendingContext:
         ]
 
         if self.returning_actors:
-            top = sorted(self.returning_actors.items(), key=lambda x: -x[1])[:8]
+            n = _cap("trending_actors")
+            top = sorted(self.returning_actors.items(), key=lambda x: -x[1])[:n]
             _drop("actores persistentes", len(top), len(self.returning_actors))
             actors_str = ", ".join(f"{a} ({d}d)" for a, d in top)
             lines.append(f"  Actores persistentes (activos en ≥2 días): {actors_str}")
 
         if self.new_actors:
-            _drop("actores nuevos", 8, len(self.new_actors))
+            n = _cap("trending_new_actors")
+            _drop("actores nuevos", min(n, len(self.new_actors)), len(self.new_actors))
             lines.append(f"  Actores nuevos hoy (no vistos en {self.window_days} días): "
-                         + ", ".join(self.new_actors[:8]))
+                         + ", ".join(self.new_actors[:n]))
 
         if self.recurring_cves:
-            top = sorted(self.recurring_cves.items(), key=lambda x: -x[1])[:6]
+            n = _cap("trending_cves")
+            top = sorted(self.recurring_cves.items(), key=lambda x: -x[1])[:n]
             _drop("CVEs recurrentes", len(top), len(self.recurring_cves))
             cves_str = ", ".join(f"{c} ({d}d)" for c, d in top)
             lines.append(f"  CVEs recurrentes (mencionados en ≥2 días): {cves_str}")
 
         if self.threat_type_delta:
+            n = _cap("trending_deltas")
             changes = []
             for t, delta in sorted(self.threat_type_delta.items(), key=lambda x: -abs(x[1])):
                 arrow = "↑" if delta > 0 else "↓"
                 changes.append(f"{t} {arrow}{abs(delta):.0f}%")
-            _drop("deltas de tipo de amenaza", 5, len(changes))
-            lines.append(f"  Tendencia vs. media de ventana: " + " | ".join(changes[:5]))
+            _drop("deltas de tipo de amenaza", min(n, len(changes)), len(changes))
+            lines.append("  Tendencia vs. media de ventana: " + " | ".join(changes[:n]))
 
         lines.append("  (usa este contexto para distinguir amenazas emergentes de persistentes)")
         return "\n".join(lines)

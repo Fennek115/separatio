@@ -139,9 +139,47 @@ LOG_MAX_BYTES    = 5_242_880
 LOG_BACKUP_COUNT = 5
 LOG_LEVEL        = "INFO"
 
-# Veredictos de enrichment por fuente que entran al prompt de Stage 3. Lo que
-# exceda se registra como recorte en el manifiesto en vez de desaparecer.
-ENRICH_PROMPT_MAX_PER_SOURCE = 25
+# ─────────────────────────────────────────────
+# TOPES DE PROMPT (F-I del rework)
+# ─────────────────────────────────────────────
+# Los topes viejos (25 veredictos por fuente, 8 IOCs por artículo, 8 actores…)
+# venían de la era Ollama con `num_ctx=2048`. Los modelos actuales tienen 200K
+# (Haiku 4.5) y 1M (Sonnet 5 / Opus 5) de contexto: con Sonnet 5 a $3 por millón
+# de entrada, 10.000 tokens extra por fase cuestan 3 centavos. El tope ya no se
+# justifica por costo — sólo se justifica si el informe empeora por ruido.
+# Medido en el A/B de F-I (ver docs/fases/F-I.md §As-built).
+#
+# Lo que exceda el tope se registra como recorte en el manifiesto (F-H) y se
+# declara en el bloque de COBERTURA del prompt (F-I): nada se pierde en silencio.
+PROMPT_CAPS: dict = {
+    "verdicts_per_source":  60,   # era 25 (ENRICH_PROMPT_MAX_PER_SOURCE)
+    "iocs_per_article":     20,   # era 8  hardcodeado en analyzer.py
+    "trending_actors":      12,   # era 8  hardcodeado en history.py
+    "trending_new_actors":  12,   # era 8  hardcodeado en history.py
+    "trending_cves":        10,   # era 6  hardcodeado en history.py
+    "trending_deltas":       8,   # era 5  hardcodeado en history.py
+}
+
+# PHASE_ARTICLE_LIMITS NO entra acá a propósito: ese recorte sí es sustantivo
+# (50 artículos de vulnerabilidades es un prompt distinto a 120) y además ya se
+# declaraba en el prompt antes de F-I.
+
+# Esfuerzo de razonamiento por fase (`output_config.effort` de la API de Claude).
+# Hasta F-I no se seteaba en ninguna llamada, así que todas corrían en el default
+# `high`. Se deja en `high` (sin cambio de conducta) y la fase mide `medium` en
+# el A/B. Sólo Sonnet 5 / Opus 5 lo aceptan: **Haiku 4.5 devuelve 400 si se le
+# pasa `effort`**, así que Stage 2 y las fases latam/general quedan afuera.
+PHASE_EFFORT: dict = {
+    "vulnerability": "high",
+    "threat_intel":  "high",
+    "synthesis":     "high",
+}
+
+# Stage 2 pedía el JSON por prompt ("Responde SOLO con este JSON") y reintentaba
+# una vez ante JSONDecodeError — cada reintento es una llamada pagada de más.
+# Los tres modelos del pipeline soportan salida estructurada contra un esquema.
+# El reintento se conserva como red; esto baja su frecuencia a cero.
+STAGE2_STRUCTURED_OUTPUT = True
 
 # Formato de salida: "markdown" | "html" | "both" (md+html) | "pdf" | "all" (md+html+pdf)
 OUTPUT_FORMAT = "both"

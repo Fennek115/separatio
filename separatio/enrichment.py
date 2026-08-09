@@ -32,8 +32,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Veredictos por fuente que entran al prompt. El tope real vive en
-# config.ENRICH_PROMPT_MAX_PER_SOURCE; éste es el default si nadie lo pasa.
-DEFAULT_PROMPT_CAP = 25
+# config.PROMPT_CAPS["verdicts_per_source"] (F-I); éste es el piso si config no
+# está disponible (import suelto, tests que no cargan config).
+DEFAULT_PROMPT_CAP = 60
+
+
+def _default_cap() -> int:
+    try:
+        from separatio import config
+        return int((getattr(config, "PROMPT_CAPS", {}) or {})
+                   .get("verdicts_per_source", DEFAULT_PROMPT_CAP))
+    except Exception:
+        return DEFAULT_PROMPT_CAP
 
 # Detección mínima de tipo de IOC (independiente de pipeline.py para evitar
 # import circular). Coincide con _detect_ioc_type del pipeline.
@@ -116,11 +126,14 @@ class EnrichmentContext:
     def malicious_iocs(self) -> list[IocVerdict]:
         return self.verdicts
 
-    def format_for_prompt(self, cap: int = DEFAULT_PROMPT_CAP) -> str:
-        """Bloque de texto para anexar al CorrelationContext de Stage 3.
+    def format_for_prompt(self, cap: int | None = None) -> str:
+        """Bloque de texto de enrichment para el prompt de Stage 3.
 
         `cap` es el máximo de veredictos por fuente que entran al prompt: lo que
-        exceda se registra como Drop y se declara al cierre de la corrida."""
+        exceda se registra como Drop y se declara en el bloque de cobertura.
+        None → el tope de `config.PROMPT_CAPS`, resuelto en cada llamada."""
+        if cap is None:
+            cap = _default_cap()
         if not self.verdicts and not self.notes:
             return ""
         lines: list[str] = []

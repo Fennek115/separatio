@@ -511,13 +511,16 @@ def stage25_correlate(summaries: list[ArticleSummary]) -> CorrelationContext:
 # ETAPA 2.7: ENRICHMENT EXTERNO DE IOCs
 # ─────────────────────────────────────────────
 
-def stage27_enrich(
-    summaries: list[ArticleSummary],
-    correlation: CorrelationContext,
-):
+def stage27_enrich(summaries: list[ArticleSummary]):
     """Cruza los IOCs del día contra fuentes externas (IPsum, OpenPhish, ipcheck…)
-    y anexa los veredictos al CorrelationContext para que lleguen al prompt de
-    Stage 3. Toda la etapa es tolerante a fallos: nunca aborta el run."""
+    y **devuelve** el EnrichmentContext. Toda la etapa es tolerante a fallos:
+    nunca aborta el run — devuelve None y el pipeline sigue sin enrichment.
+
+    Hasta F-I el bloque se anexaba a `correlation.extra_blocks` para no tocar las
+    firmas de analyzer.py; el efecto colateral era que el enrichment sólo llegaba
+    a las fases que ya recibían correlación (vulnerability y threat_intel), y
+    LATAM y general nunca veían que una IP del artículo estuviera en una
+    blocklist. Ahora es un parámetro propio y llega a las cuatro."""
     if not getattr(config, "ENRICHMENT_ENABLED", False):
         return None
     logger.info("═" * 50)
@@ -532,11 +535,6 @@ def stage27_enrich(
             logger.info("  Enrichment: sin fuentes habilitadas")
             return None
         ctx = run_enrichment(summaries, enrichers)
-        block = ctx.format_for_prompt(
-            cap=getattr(config, "ENRICH_PROMPT_MAX_PER_SOURCE", 25)
-        )
-        if block:
-            correlation.extra_blocks.append(block)
         logger.info(
             f"  Enrichment: {len(ctx.verdicts)} veredictos | "
             f"ok={ctx.sources_ok} | fallidas={ctx.sources_failed}"
@@ -581,7 +579,8 @@ def stage3_report(summaries: list[ArticleSummary],
                   date_str: str,
                   correlation: CorrelationContext | None = None,
                   trending: TrendingContext | None = None,
-                  dry_run: bool = False) -> dict[str, str]:
+                  dry_run: bool = False,
+                  enrichment=None) -> dict[str, str]:
     logger.info("═" * 50)
     logger.info(f"ETAPA 3: Generando informe con {config.REPORT_MODEL}")
     logger.info("═" * 50)
@@ -616,6 +615,7 @@ def stage3_report(summaries: list[ArticleSummary],
             num_threads=getattr(config, "OLLAMA_NUM_THREADS", 0),
             correlation=correlation,
             trending=trending,
+            enrichment=enrichment,
             max_tokens=config.REPORT_MAX_TOKENS,
             article_limit=getattr(config, "REPORT_ARTICLE_LIMIT", None),
             provider=config.PROVIDER,
@@ -638,8 +638,10 @@ def stage3_report(summaries: list[ArticleSummary],
 # ETAPA 3 MULTI-FASE + ETAPA 4 SÍNTESIS
 # ─────────────────────────────────────────────
 
-# Fases que reciben CorrelationContext (y con él, el bloque de enrichment).
-ENRICHED_PHASES = ("vulnerability", "threat_intel")
+# Fases que reciben CorrelationContext (KEV/EPSS y CVEs corroborados). LATAM y
+# general quedan afuera a propósito: ahí un listado de CVEs en KEV es ruido.
+# El **enrichment** ya no sigue esta lista — desde F-I va a las cuatro fases.
+CORRELATED_PHASES = ("vulnerability", "threat_intel")
 
 
 def stage3_phases(
@@ -648,6 +650,7 @@ def stage3_phases(
     correlation: CorrelationContext | None = None,
     trending: TrendingContext | None = None,
     dry_run: bool = False,
+    enrichment=None,
 ) -> dict[str, str]:
     """Etapa 3 multi-fase: 4 llamadas LLM especializadas secuenciales."""
     logger.info("═" * 50)
@@ -668,18 +671,18 @@ def stage3_phases(
 
     phase_outputs: dict[str, str] = {}
 
-    # El enrichment (y la correlación) sólo se pasan a vulnerability y
-    # threat_intel: latam y general nunca ven un veredicto de IOC. Es el diseño
-    # actual, no un bug — pero hasta F-H no se declaraba en ningún lado, así que
-    # el informe parecía tener todo el contexto en las cuatro fases.
+    # La correlación (KEV/EPSS) sigue yendo sólo a vulnerability y threat_intel;
+    # el enrichment, desde F-I, va a las cuatro. Se sigue registrando el recorte
+    # de correlación para que el manifiesto no dé a entender que todas las fases
+    # ven lo mismo.
     if correlation is not None:
-        con_ctx = [p for p in phase_order if p in ENRICHED_PHASES and phases.get(p)]
-        sin_ctx = [p for p in phase_order if p not in ENRICHED_PHASES and phases.get(p)]
+        con_ctx = [p for p in phase_order if p in CORRELATED_PHASES and phases.get(p)]
+        sin_ctx = [p for p in phase_order if p not in CORRELATED_PHASES and phases.get(p)]
         if sin_ctx:
             runlog.record_drop(
-                "pipeline.stage3_phases.enrichment", kind="filter",
+                "pipeline.stage3_phases.correlation", kind="filter",
                 shown=len(con_ctx), total=len(con_ctx) + len(sin_ctx),
-                detail=f"sin enrichment: {', '.join(sin_ctx)}",
+                detail=f"sin correlación KEV/EPSS: {', '.join(sin_ctx)}",
             )
 
     for phase in phase_order:
@@ -714,8 +717,9 @@ def stage3_phases(
             max_tokens=max_tok,
             provider=config.PROVIDER,
             article_limit=art_limit,
-            correlation=correlation if phase in ENRICHED_PHASES else None,
-            trending=trending        if phase == "threat_intel"                  else None,
+            correlation=correlation if phase in CORRELATED_PHASES else None,
+            trending=trending       if phase == "threat_intel"    else None,
+            enrichment=enrichment,
         )
 
     return phase_outputs
@@ -864,8 +868,8 @@ def _run(args, date_str: str) -> None:
         ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str))
         with runlog.stage("stage2.5"):
             correlation = stage25_correlate(summaries)
-        stage27_enrich(summaries, correlation)
-        paths = _report_stages(summaries, date_str, correlation, None, args)
+        enrichment = stage27_enrich(summaries)
+        paths = _report_stages(summaries, date_str, correlation, None, args, enrichment)
         paths.update(ioc_paths)
         _print_result(paths)
         return
@@ -907,25 +911,27 @@ def _run(args, date_str: str) -> None:
 
     with runlog.stage("stage2.5"):
         correlation = stage25_correlate(summaries)
-    stage27_enrich(summaries, correlation)
+    enrichment = stage27_enrich(summaries)
     with runlog.stage("stage2.6"):
         trending = stage26_history(summaries, date_str, correlation)
 
-    paths = _report_stages(summaries, date_str, correlation, trending, args)
+    paths = _report_stages(summaries, date_str, correlation, trending, args, enrichment)
     paths.update(ioc_paths)
     _print_result(paths)
 
 
-def _report_stages(summaries, date_str, correlation, trending, args) -> dict[str, str]:
+def _report_stages(summaries, date_str, correlation, trending, args,
+                   enrichment=None) -> dict[str, str]:
     """Etapas 3 y 4 (o la 3 legacy), cronometradas para el manifiesto."""
     if getattr(config, "PHASE_REPORTS", False):
         with runlog.stage("stage3_phases"):
             phase_outputs = stage3_phases(summaries, date_str, correlation, trending,
-                                          dry_run=args.dry_run)
+                                          dry_run=args.dry_run, enrichment=enrichment)
         with runlog.stage("stage4"):
             return stage4_synthesis(phase_outputs, summaries, date_str, dry_run=args.dry_run)
     with runlog.stage("stage3"):
-        return stage3_report(summaries, date_str, correlation, trending, dry_run=args.dry_run)
+        return stage3_report(summaries, date_str, correlation, trending,
+                             dry_run=args.dry_run, enrichment=enrichment)
 
 
 def _week_label() -> str:

@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from separatio import runlog
+from separatio import config, runlog
 from separatio.analyzer import ArticleSummary, _format_phase_items
 from separatio.enrichment import EnrichmentContext, IocVerdict
 
@@ -235,31 +235,41 @@ def test_find_latest_sin_manifiestos(tmp_path):
 # ── integración con el recorte real ─────────────────────────
 
 def test_format_for_prompt_registra_el_recorte():
-    """30 veredictos de una fuente ⇒ un Drop(shown=25, total=30)."""
+    """Más veredictos que el tope ⇒ un Drop con los números reales.
+
+    El tope concreto vive en `config.PROMPT_CAPS` desde F-I y se movió (25 → 60):
+    lo que este test fija es que el recorte se aplica y queda registrado, no
+    cuánto vale el tope. Ese valor lo fija test_analyzer_prompts."""
+    cap = config.PROMPT_CAPS["verdicts_per_source"]
+    total = cap + 5
     runlog.start_run("2026-08-09", "full")
     ctx = EnrichmentContext()
-    for i in range(30):
-        ctx.add(_verdict(f"10.0.0.{i}"))
+    for i in range(total):
+        ctx.add(_verdict(f"10.0.{i // 256}.{i % 256}"))
     bloque = ctx.format_for_prompt()
 
     drops = [d for d in runlog.current().drops
              if d.where == "enrichment.format_for_prompt"]
     assert len(drops) == 1
-    assert (drops[0].shown, drops[0].total, drops[0].detail) == (25, 30, "IPsum")
-    assert bloque.count("10.0.0.") == 25      # y el prompt efectivamente lleva 25
+    assert (drops[0].shown, drops[0].total, drops[0].detail) == (cap, total, "IPsum")
+    assert bloque.count("10.0.") == cap      # y el prompt efectivamente lleva `cap`
 
 
 def test_format_phase_items_registra_iocs_recortados():
-    """Un artículo con 12 IOCs ⇒ un Drop(shown=8, total=12)."""
+    """Un artículo con más IOCs que el tope ⇒ un Drop con los números reales."""
+    cap = config.PROMPT_CAPS["iocs_per_article"]
+    total = cap + 4
     runlog.start_run("2026-08-09", "full")
-    art = _summary(iocs=[f"10.0.0.{i}" for i in range(12)])
+    art = _summary(iocs=[f"10.0.0.{i}" for i in range(total)])
     _top, items = _format_phase_items([art], article_limit=50, phase="vulnerability")
 
     drops = [d for d in runlog.current().drops
              if d.where == "analyzer._format_phase_items.iocs"]
     assert len(drops) == 1
-    assert (drops[0].shown, drops[0].total) == (8, 12)
-    assert items[0].count("10.0.0.") == 8
+    assert (drops[0].shown, drops[0].total) == (cap, total)
+    # El detalle lleva la fase adelante: el bloque de cobertura de F-I filtra por ahí.
+    assert drops[0].detail.startswith("vulnerability:")
+    assert items[0].count("10.0.0.") == cap
 
 
 def test_format_phase_items_registra_articulos_recortados():
@@ -286,10 +296,12 @@ def test_truncate_text_registra_el_truncado():
 def test_trending_registra_recorte_de_actores():
     from separatio.history import TrendingContext
 
+    cap = config.PROMPT_CAPS["trending_actors"]
+    total = cap + 4
     runlog.start_run("2026-08-09", "full")
     ctx = TrendingContext(window_days=14, days_with_data=10,
-                          returning_actors={f"APT{i}": 3 for i in range(12)})
+                          returning_actors={f"APT{i}": 3 for i in range(total)})
     ctx.format_for_prompt()
 
     drops = [d for d in runlog.current().drops if d.where == "history.format_for_prompt"]
-    assert (drops[0].shown, drops[0].total) == (8, 12)
+    assert (drops[0].shown, drops[0].total) == (cap, total)
