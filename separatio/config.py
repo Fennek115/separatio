@@ -18,6 +18,13 @@ from pathlib import Path
 # rutas relativas dispersaban los reports y reseteaban history.json.
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+# Raíz del MONOREPO (un nivel arriba del paquete): ahí viven `data/`, `tools/` y
+# `tests/`, que no son del paquete `separatio` sino del repo. Las rutas de datos
+# se anclan acá por el mismo motivo que las de salida a PROJECT_ROOT: hasta F-A
+# eran cadenas relativas ("data/honeypot/...") que sólo resolvían si el cwd era
+# la raíz — el service del CT lo es, pero cualquier otra invocación no.
+REPO_ROOT = PROJECT_ROOT.parent
+
 # ─────────────────────────────────────────────
 # LLM PROVIDER
 # ─────────────────────────────────────────────
@@ -122,6 +129,20 @@ PER_FEED_LIMIT = 10
 # ─────────────────────────────────────────────
 OUTPUT_DIR = str(PROJECT_ROOT / "reports")
 
+# ─────────────────────────────────────────────
+# OBSERVABILIDAD DE LA CORRIDA (F-H del rework — separatio/runlog.py)
+# ─────────────────────────────────────────────
+# El log estaba en modo append sin rotación: 188 KB y creciendo, con todas las
+# corridas mezcladas y sin forma de aislar una. 5 MB × 5 backups acota el disco
+# del CT (512 MiB) sin perder la historia reciente.
+LOG_MAX_BYTES    = 5_242_880
+LOG_BACKUP_COUNT = 5
+LOG_LEVEL        = "INFO"
+
+# Veredictos de enrichment por fuente que entran al prompt de Stage 3. Lo que
+# exceda se registra como recorte en el manifiesto en vez de desaparecer.
+ENRICH_PROMPT_MAX_PER_SOURCE = 25
+
 # Formato de salida: "markdown" | "html" | "both" (md+html) | "pdf" | "all" (md+html+pdf)
 OUTPUT_FORMAT = "both"
 
@@ -218,8 +239,42 @@ ONIONLOOKUP_MAX = 10     # tope de lookups por run (lo normal es 0 .onion/día)
 # (tools/pull_honeypot.sh) que trae los atacantes del sensor de Oracle.
 # OFF hasta que el colector deposite datos reales (necesita el paso de OCI
 # Security List que abre SSH al honeypot desde casa — ver honeypot/DEPLOY.md).
-HONEYPOT_DATA      = "data/honeypot/attackers.json"
+HONEYPOT_DATA      = str(REPO_ROOT / "data" / "honeypot" / "attackers.json")
 HONEYPOT_MAX_NOTES = 10
+
+# ─────────────────────────────────────────────
+# HIGIENE DE LA ENTRADA (F-A del rework — separatio/hygiene.py)
+# ─────────────────────────────────────────────
+# Sin esto el dato propio es ruido propio: la primera corrida del colector
+# reportó como "atacante" al laptop del usuario. Dos categorías que significan
+# cosas distintas: las IPs propias se DESCARTAN (no son dato) y los escáneres de
+# investigación se ETIQUETAN (son dato, pero no son un ataque).
+
+# IPs/CIDR propias, separadas por coma. Va por entorno y NO acá porque el repo
+# es público y son la dirección de casa. En el CT: /etc/intel/intel.env.
+OWN_IPS = os.getenv("OWN_IPS", "")
+
+# La IP pública de casa es dinámica: una allowlist estática se pudre en silencio
+# y el dataset se vuelve a contaminar. Una petición por corrida la mantiene sola;
+# si falla se usa el último valor cacheado (fail-open hacia lo ya conocido).
+def _env_bool(name: str, default: bool) -> bool:
+    """Toggle por entorno, para poder apagar algo en el CT sin editar código."""
+    v = os.getenv(name)
+    return default if v is None else v.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+OWN_IP_RESOLVE         = _env_bool("OWN_IP_RESOLVE", True)
+OWN_IP_RESOLVE_URL     = "https://api.ipify.org"
+OWN_IP_RESOLVE_TIMEOUT = 5
+OWN_IP_CACHE           = str(REPO_ROOT / "data" / "own_ips.auto")
+
+# Escáneres de investigación (Censys, Shodan, Shadowserver…): CIDR publicadas +
+# PTR. El PTR es el que no se pudre — dicen literalmente quiénes son — y cuesta
+# una consulta DNS por IP nueva, sin cuota. Con tope de reloj por consulta.
+SCANNER_CLASSIFY    = _env_bool("SCANNER_CLASSIFY", True)
+SCANNER_PTR_LOOKUP  = _env_bool("SCANNER_PTR_LOOKUP", True)
+SCANNER_PTR_TIMEOUT = 3      # segundos por PTR (thread daemon que se abandona)
+SCANNER_PTR_MAX     = 500    # tope de consultas por corrida
 
 # malwarebazaar (abuse.ch): cruza hashes del día contra MalwareBazaar y marca la
 # familia. Señal fuerte si el hash ADEMÁS está en el corpus del honeypot propio
@@ -232,7 +287,7 @@ MALWAREBAZAAR_AUTH_KEYS = [k for k in (
     os.getenv("ABUSECH_API_KEY_2"),
     os.getenv("MALWAREBAZAAR_AUTH_KEY"),
 ) if k]
-MALWAREBAZAAR_CORPUS    = "data/honeypot/hashes.log"
+MALWAREBAZAAR_CORPUS    = str(REPO_ROOT / "data" / "honeypot" / "hashes.log")
 MALWAREBAZAAR_MAX       = 25   # tope de lookups por run (protege cuota)
 
 # ─────────────────────────────────────────────

@@ -59,6 +59,7 @@ venv/bin/separatio --dry-run          # fetch only, no LLM — AISLADO en report
 venv/bin/separatio --limit 20         # cap at 20 articles
 venv/bin/separatio --report-only      # re-generate report from today's cache JSON
 venv/bin/separatio --no-mark-read     # skip marking articles as read in Miniflux
+venv/bin/separatio --last-run         # resumen de la última corrida (F-H; --json = manifiesto)
 venv/bin/separatio-check              # environment diagnostics (carga el .env)
 ```
 
@@ -159,10 +160,21 @@ Miniflux API (unread articles, ordered by published_at desc)
 
      ▼ reporter.py
   reports/threat-briefing-YYYY-MM-DD.{md,html,pdf}
-  pipeline.log written to OUTPUT_DIR (not the working directory)
+  reports/YYYY-MM-DD/run-manifest.json   ← F-H: qué corrió, qué falló, qué se recortó
+  pipeline.log written to OUTPUT_DIR (rotating: 5 MB × 5 backups)
 ```
 
 ## Non-obvious implementation details
+
+**`runlog.py` es el manifiesto de la corrida (F-H, 2026-08-09)**: singleton de módulo con no-op,
+como el `logger` — si nadie llamó a `start_run` (tests, import suelto), cada `record_*` no hace nada
+y no falla, así que instrumentar nunca puede romper el pipeline. `main()` está partido en
+`main()`/`_run()` para que `finish_run` corra en un `finally` pase lo que pase. Reglas de estado:
+`ok` / `degraded` (fuente caída u **omitida**, etapa no crítica fallida, salida truncada → exit 0) /
+`failed` (una etapa de `CRITICAL_STAGES` falló o no se generó informe → exit 1). Un enricher que se
+salta por falta de key se marca `skipped: <motivo>` y **`run_enrichment` no puede pisarlo con `ok`**:
+no lanzar no es lo mismo que haber consultado la fuente. Para agregar un recorte nuevo, una línea:
+`runlog.record_drop("donde", shown, total, detail=...)` — si `total <= shown` no registra nada.
 
 **Enrichment (Stage 2.7) injects via `CorrelationContext.extra_blocks`**: rather than threading a new param through `generate_report`/`generate_phase_report`, `stage27_enrich` appends the enrichment prompt block to `correlation.extra_blocks`, which `format_for_prompt()` renders at the end. This keeps `analyzer.py` signatures untouched. Enrichment only reaches phases that already receive `correlation` (vulnerability, threat_intel).
 
@@ -176,7 +188,7 @@ Miniflux API (unread articles, ordered by published_at desc)
 
 **Stage 2 fail-fast**: `stage2_summarize` aborts if ≥`STAGE2_FAIL_FAST_THRESHOLD` (0.5) of articles fail to summarize — avoids burning hours on Stage 3 to emit an empty report when the LLM provider is down.
 
-**Tests**: `venv/bin/pytest tests/ -q` desde la raíz del monorepo (deterministic, no network — HTTP monkeypatched). See `../docs/IMPROVEMENTS.md` for the full review and the roadmap of pending large refactors (provider abstraction, Jinja2 reporter, pipeline split).
+**Tests**: `venv/bin/pytest tests/ -q` desde la raíz del monorepo — **94**, deterministas y sin red (HTTP monkeypatched). See `../docs/IMPROVEMENTS.md` for the full review and the roadmap of pending large refactors (provider abstraction, Jinja2 reporter, pipeline split).
 
 **`think` and `keep_alive` are top-level `chat()` params**: in the Ollama Python client they are NOT inside the `options` dict — they are direct keyword arguments to `client.chat()`. `options` only accepts model parameters (temperature, num_ctx, num_thread, etc.).
 
@@ -233,6 +245,9 @@ Key tunable values:
 | `KEV_FETCH_TIMEOUT` | 15 | Seconds for KEV + EPSS HTTP requests |
 | `NO_SCRAPE_DOMAINS` | vulners, sploitus, wiz.io | Domains that block scrapers — use RSS content only |
 | `STAGE2_FAIL_FAST_THRESHOLD` | 0.5 | Abort if ≥ this fraction of summaries fail |
+| `LOG_MAX_BYTES` / `LOG_BACKUP_COUNT` | 5 MB / 5 | Rotación de `pipeline.log` (F-H) |
+| `LOG_LEVEL` | `INFO` | Nivel del root logger; los tokens por llamada salen en INFO desde F-H |
+| `ENRICH_PROMPT_MAX_PER_SOURCE` | 25 | Veredictos por fuente que entran al prompt; el resto se registra como recorte |
 | `ENRICHMENT_ENABLED` | True | Master switch for Stage 2.7 |
 | `ENRICHERS` | all three on | Per-enricher toggles (VT active since 2026-08-08: key in the root `.env`) |
 | `IPSUM_MIN_SCORE` | 3 | Min public blocklists reporting an IP to flag it |

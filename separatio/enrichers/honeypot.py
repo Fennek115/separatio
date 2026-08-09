@@ -27,6 +27,7 @@ import json
 import logging
 from pathlib import Path
 
+from separatio import runlog
 from separatio.enrichment import Enricher, EnrichmentContext, IocVerdict
 
 logger = logging.getLogger(__name__)
@@ -61,23 +62,36 @@ class HoneypotEnricher(Enricher):
         ctx.add_note(self.name,
                      f"{len(attackers)} IPs únicas atacaron el honeypot en las últimas "
                      f"{window}h (fuente: sensor propio, Oracle).")
+        runlog.record_drop("enrichers.honeypot.notes",
+                           shown=min(self.max_notes, len(top)), total=len(top))
         for a in top[:self.max_notes]:
             kinds = "+".join(a.get("kinds", [])) or "?"
-            uris = ", ".join(a.get("sample_uris", [])[:3])
+            all_uris = a.get("sample_uris", [])
+            runlog.record_drop("enrichers.honeypot.uris",
+                               shown=min(3, len(all_uris)), total=len(all_uris),
+                               detail=a.get("ip", "?"))
+            uris = ", ".join(all_uris[:3])
             tail = f" — señuelos: {uris}" if uris else ""
+            scanner = (f" [escáner de investigación: {a.get('scanner_name') or '?'}]"
+                       if a.get("class") == "scanner" else "")
             ctx.add_note(self.name,
-                         f"{a['ip']} → {a.get('hits', 0)} hits ({kinds}){tail}")
+                         f"{a['ip']} → {a.get('hits', 0)} hits ({kinds}){scanner}{tail}")
 
         # (2) Señal fuerte: IP de la que hablan los feeds y que ADEMÁS te atacó
         for ioc in iocs:
             a = by_ip.get(ioc)
-            if a:
-                kinds = "+".join(a.get("kinds", [])) or "?"
-                ctx.add(IocVerdict(
-                    ioc=ioc,
-                    kind="ip",
-                    source=self.name,
-                    label="observada atacando TU honeypot",
-                    detail=f"{a.get('hits', 0)} hits ({kinds}), "
-                           f"últimos {a.get('last_seen', '?')[:16]}",
-                ))
+            if not a:
+                continue
+            # Que Censys o Shodan te escaneen y además salgan en una noticia no es
+            # correlación: es el ruido de fondo de internet (F-A del rework).
+            if a.get("class") == "scanner":
+                continue
+            kinds = "+".join(a.get("kinds", [])) or "?"
+            ctx.add(IocVerdict(
+                ioc=ioc,
+                kind="ip",
+                source=self.name,
+                label="observada atacando TU honeypot",
+                detail=f"{a.get('hits', 0)} hits ({kinds}), "
+                       f"últimos {a.get('last_seen', '?')[:16]}",
+            ))

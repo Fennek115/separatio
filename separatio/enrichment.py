@@ -24,10 +24,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from separatio import runlog
+
 if TYPE_CHECKING:
     from separatio.analyzer import ArticleSummary
 
 logger = logging.getLogger(__name__)
+
+# Veredictos por fuente que entran al prompt. El tope real vive en
+# config.ENRICH_PROMPT_MAX_PER_SOURCE; éste es el default si nadie lo pasa.
+DEFAULT_PROMPT_CAP = 25
 
 # Detección mínima de tipo de IOC (independiente de pipeline.py para evitar
 # import circular). Coincide con _detect_ioc_type del pipeline.
@@ -110,8 +116,11 @@ class EnrichmentContext:
     def malicious_iocs(self) -> list[IocVerdict]:
         return self.verdicts
 
-    def format_for_prompt(self) -> str:
-        """Bloque de texto para anexar al CorrelationContext de Stage 3."""
+    def format_for_prompt(self, cap: int = DEFAULT_PROMPT_CAP) -> str:
+        """Bloque de texto para anexar al CorrelationContext de Stage 3.
+
+        `cap` es el máximo de veredictos por fuente que entran al prompt: lo que
+        exceda se registra como Drop y se declara al cierre de la corrida."""
         if not self.verdicts and not self.notes:
             return ""
         lines: list[str] = []
@@ -127,7 +136,10 @@ class EnrichmentContext:
                 by_source.setdefault(v.source, []).append(v)
             for source, items in by_source.items():
                 lines.append(f"  ▸ {source}:")
-                for v in items[:25]:
+                runlog.record_drop("enrichment.format_for_prompt",
+                                   shown=min(cap, len(items)), total=len(items),
+                                   detail=source)
+                for v in items[:cap]:
                     score = f" [{v.score:.0%}]" if isinstance(v.score, float) else ""
                     detail = f" — {v.detail}" if v.detail else ""
                     lines.append(f"      {v.ioc} ({v.kind}) → {v.label}{score}{detail}")
@@ -201,8 +213,11 @@ def run_enrichment(
             enricher.enrich(iocs, ctx)
             found = len(ctx.verdicts) - before
             ctx.sources_ok.append(enricher.name)
+            runlog.record_source(enricher.name, "ok")
             logger.info(f"    [{enricher.name}] {found} veredictos")
         except Exception as e:
             ctx.sources_failed.append(enricher.name)
+            runlog.record_source(enricher.name, f"failed: {type(e).__name__}: {e}")
+            runlog.record_failure(f"enricher:{enricher.name}", e)
             logger.warning(f"    [{enricher.name}] falló: {e}")
     return ctx

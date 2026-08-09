@@ -20,11 +20,20 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from separatio import runlog
+
 if TYPE_CHECKING:
     from separatio.analyzer import ArticleSummary
     from separatio.correlator import CorrelationContext
 
 logger = logging.getLogger(__name__)
+
+
+def _drop(que: str, shown: int, total: int) -> None:
+    """El bloque de trending recorta a 8 actores / 6 CVEs / 5 deltas. Es un
+    recorte razonable (el prompt no puede crecer sin límite) pero hasta F-H era
+    invisible: nadie sabía si se habían omitido 2 actores o 200."""
+    runlog.record_drop("history.format_for_prompt", shown=shown, total=total, detail=que)
 
 
 # ─────────────────────────────────────────────────────────
@@ -58,15 +67,18 @@ class TrendingContext:
 
         if self.returning_actors:
             top = sorted(self.returning_actors.items(), key=lambda x: -x[1])[:8]
+            _drop("actores persistentes", len(top), len(self.returning_actors))
             actors_str = ", ".join(f"{a} ({d}d)" for a, d in top)
             lines.append(f"  Actores persistentes (activos en ≥2 días): {actors_str}")
 
         if self.new_actors:
+            _drop("actores nuevos", 8, len(self.new_actors))
             lines.append(f"  Actores nuevos hoy (no vistos en {self.window_days} días): "
                          + ", ".join(self.new_actors[:8]))
 
         if self.recurring_cves:
             top = sorted(self.recurring_cves.items(), key=lambda x: -x[1])[:6]
+            _drop("CVEs recurrentes", len(top), len(self.recurring_cves))
             cves_str = ", ".join(f"{c} ({d}d)" for c, d in top)
             lines.append(f"  CVEs recurrentes (mencionados en ≥2 días): {cves_str}")
 
@@ -75,6 +87,7 @@ class TrendingContext:
             for t, delta in sorted(self.threat_type_delta.items(), key=lambda x: -abs(x[1])):
                 arrow = "↑" if delta > 0 else "↓"
                 changes.append(f"{t} {arrow}{abs(delta):.0f}%")
+            _drop("deltas de tipo de amenaza", 5, len(changes))
             lines.append(f"  Tendencia vs. media de ventana: " + " | ".join(changes[:5]))
 
         lines.append("  (usa este contexto para distinguir amenazas emergentes de persistentes)")

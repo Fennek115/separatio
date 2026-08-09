@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import logging
+import logging.handlers
 import os
 import re
 import sys
@@ -28,7 +29,7 @@ from dotenv import load_dotenv
 # os.getenv() ya vea las claves sin efectos en tiempo de import.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from separatio import config
+from separatio import config, runlog
 from separatio.miniflux_client import MinifluxClient
 from separatio.extractor import extract_article_text, truncate_text
 from separatio.analyzer import (ArticleSummary, summarize_article, generate_report,
@@ -41,13 +42,18 @@ from separatio.reporter import save_report
 Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, getattr(config, "LOG_LEVEL", "INFO"), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(
+        # Rotación (F-H): en modo append el log crecía para siempre — 188 KB y
+        # subiendo, con todas las corridas mezcladas. 5 MB × 5 backups acota el
+        # disco del CT sin dependencias (stdlib).
+        logging.handlers.RotatingFileHandler(
             os.path.join(config.OUTPUT_DIR, "pipeline.log"),
+            maxBytes=getattr(config, "LOG_MAX_BYTES", 5_242_880),
+            backupCount=getattr(config, "LOG_BACKUP_COUNT", 5),
             encoding="utf-8",
         ),
     ],
@@ -237,6 +243,7 @@ def run_weekly(days: int = 7) -> None:
 
     if not all_summaries:
         logger.error("No se encontraron cachés en los últimos %d días.", days)
+        runlog.expect_no_report(f"sin cachés diarias en los últimos {days} días")
         return
 
     dates_found.sort()
@@ -325,6 +332,10 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
         articles = [a for a in articles if a.feed_category in config.FEED_CATEGORIES]
         logger.info(f"Filtro por categorías: {before} → {len(articles)} artículos")
 
+    # "pool" y no "disponibles": con PER_FEED_LIMIT se piden limit*5 entradas a
+    # Miniflux, así que esto es el lote consultado, no el total de no leídos.
+    runlog.record_count("articulos_pool", len(articles))
+
     if per_feed:
         counts: dict[str, int] = defaultdict(int)
         capped = []
@@ -335,6 +346,10 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
         logger.info(
             f"Límite por feed ({per_feed}): pool={len(articles)} → {len(capped)} artículos"
         )
+        runlog.record_drop("pipeline.stage1_fetch.per_feed",
+                           shown=len(capped), total=len(articles))
+        runlog.record_drop("pipeline.stage1_fetch.global",
+                           shown=min(limit, len(capped)), total=len(capped))
         articles = capped[:limit]
 
     # Deduplicar por URL — la misma noticia puede aparecer en varios feeds.
@@ -373,6 +388,7 @@ def stage1_fetch(client: MinifluxClient, limit: int) -> list[dict]:
         })
 
     logger.info(f"Etapa 1 completada: {len(processed)} artículos extraídos")
+    runlog.record_count("articulos_tomados", len(processed))
     return processed
 
 
@@ -457,6 +473,10 @@ def stage2_summarize(articles: list[dict], dry_run: bool = False) -> list[Articl
         f"Etapa 2 completada en {total_time / 60:.1f} min "
         f"({len(summaries)} resúmenes, {failures} fallos) — {by_severity}"
     )
+    runlog.record_count("articulos_resumidos", len(summaries) - failures)
+    runlog.record_count("articulos_fallidos", failures)
+    runlog.record_drop("pipeline.stage2_summarize", kind="failure",
+                       shown=len(articles) - failures, total=len(articles))
 
     # Fail-fast: si demasiados artículos fallaron, casi siempre indica un fallo
     # sistémico (LLM/provider caído, key inválida). Abortar aquí evita gastar
@@ -512,7 +532,9 @@ def stage27_enrich(
             logger.info("  Enrichment: sin fuentes habilitadas")
             return None
         ctx = run_enrichment(summaries, enrichers)
-        block = ctx.format_for_prompt()
+        block = ctx.format_for_prompt(
+            cap=getattr(config, "ENRICH_PROMPT_MAX_PER_SOURCE", 25)
+        )
         if block:
             correlation.extra_blocks.append(block)
         logger.info(
@@ -522,6 +544,7 @@ def stage27_enrich(
         return ctx
     except Exception as e:
         logger.warning(f"  Enrichment falló (no crítico, se continúa): {e}")
+        runlog.record_failure("stage:2.7-enrichment", e)
         return None
 
 
@@ -615,6 +638,10 @@ def stage3_report(summaries: list[ArticleSummary],
 # ETAPA 3 MULTI-FASE + ETAPA 4 SÍNTESIS
 # ─────────────────────────────────────────────
 
+# Fases que reciben CorrelationContext (y con él, el bloque de enrichment).
+ENRICHED_PHASES = ("vulnerability", "threat_intel")
+
+
 def stage3_phases(
     summaries: list[ArticleSummary],
     date_str: str,
@@ -640,6 +667,20 @@ def stage3_phases(
     phase_art_limits = getattr(config, "PHASE_ARTICLE_LIMITS", {}) or {}
 
     phase_outputs: dict[str, str] = {}
+
+    # El enrichment (y la correlación) sólo se pasan a vulnerability y
+    # threat_intel: latam y general nunca ven un veredicto de IOC. Es el diseño
+    # actual, no un bug — pero hasta F-H no se declaraba en ningún lado, así que
+    # el informe parecía tener todo el contexto en las cuatro fases.
+    if correlation is not None:
+        con_ctx = [p for p in phase_order if p in ENRICHED_PHASES and phases.get(p)]
+        sin_ctx = [p for p in phase_order if p not in ENRICHED_PHASES and phases.get(p)]
+        if sin_ctx:
+            runlog.record_drop(
+                "pipeline.stage3_phases.enrichment", kind="filter",
+                shown=len(con_ctx), total=len(con_ctx) + len(sin_ctx),
+                detail=f"sin enrichment: {', '.join(sin_ctx)}",
+            )
 
     for phase in phase_order:
         arts = phases.get(phase, [])
@@ -673,7 +714,7 @@ def stage3_phases(
             max_tokens=max_tok,
             provider=config.PROVIDER,
             article_limit=art_limit,
-            correlation=correlation if phase in ("vulnerability", "threat_intel") else None,
+            correlation=correlation if phase in ENRICHED_PHASES else None,
             trending=trending        if phase == "threat_intel"                  else None,
         )
 
@@ -759,6 +800,10 @@ def main():
                         help="Generar resumen semanal desde los últimos 7 días de caché")
     parser.add_argument("--weekly-days", type=int, default=7,
                         help="Días a incluir en el resumen semanal (default: 7)")
+    parser.add_argument("--last-run",    action="store_true",
+                        help="Reimprime el resumen de la última corrida y sale")
+    parser.add_argument("--json",        action="store_true",
+                        help="Con --last-run: escupe el manifiesto crudo")
     args = parser.parse_args()
 
     if args.categories:
@@ -774,28 +819,53 @@ def main():
 
     Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
-    if args.weekly:
-        run_weekly(days=args.weekly_days)
-        return
+    if args.last_run:
+        sys.exit(_show_last_run(as_json=args.json))
 
     date_str = datetime.now().strftime("%Y-%m-%d")
+    mode = ("weekly" if args.weekly else
+            "dry-run" if args.dry_run else
+            "report-only" if args.report_only else "full")
+    label = _week_label() if args.weekly else date_str
+
+    runlog.start_run(date_str, mode)
     logger.info(f"\n{'═' * 50}")
-    logger.info(f"  THREAT INTELLIGENCE PIPELINE — {date_str}")
+    logger.info(f"  THREAT INTELLIGENCE PIPELINE — {label}  [modo: {mode}]")
     if config.FEED_CATEGORIES:
         logger.info(f"  Categorías: {', '.join(config.FEED_CATEGORIES)}")
     logger.info(f"{'═' * 50}\n")
 
+    try:
+        _run(args, date_str)
+    except Exception as e:
+        # Cualquier excepción no atrapada: se anota y se cierra el manifiesto
+        # igual — una corrida que revienta también tiene que quedar registrada.
+        logger.exception(f"Corrida abortada: {e}")
+        runlog.record_failure("pipeline", e)
+    finally:
+        manifest = runlog.finish_run(Path(_dated_dir(label)) / runlog.MANIFEST_NAME)
+        logger.info("\n" + manifest.summary_text())
+
+    sys.exit(manifest.exit_code())
+
+
+def _run(args, date_str: str) -> None:
+    """El cuerpo de la corrida. Separado de main() para que el manifiesto se
+    cierre siempre, pase lo que pase acá adentro."""
+    if args.weekly:
+        run_weekly(days=args.weekly_days)
+        return
+
     if args.report_only:
         logger.info("Modo --report-only: cargando resúmenes desde caché...")
-        summaries   = load_summaries_cache(date_str)
-        ioc_paths   = export_iocs(summaries, date_str, _dated_dir(date_str))
-        correlation = stage25_correlate(summaries)
+        with runlog.stage("cache"):
+            summaries = load_summaries_cache(date_str)
+        runlog.record_count("articulos_cache", len(summaries))
+        ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str))
+        with runlog.stage("stage2.5"):
+            correlation = stage25_correlate(summaries)
         stage27_enrich(summaries, correlation)
-        if getattr(config, "PHASE_REPORTS", False):
-            phase_outputs = stage3_phases(summaries, date_str, correlation, dry_run=args.dry_run)
-            paths         = stage4_synthesis(phase_outputs, summaries, date_str, dry_run=args.dry_run)
-        else:
-            paths = stage3_report(summaries, date_str, correlation, dry_run=args.dry_run)
+        paths = _report_stages(summaries, date_str, correlation, None, args)
         paths.update(ioc_paths)
         _print_result(paths)
         return
@@ -810,14 +880,21 @@ def main():
         )
     except Exception as e:
         logger.error(f"No se pudo conectar a Miniflux: {e}")
-        sys.exit(1)
-
-    articles = stage1_fetch(client, limit=args.limit)
-    if not articles:
-        logger.info("No hay artículos para procesar. Saliendo.")
+        runlog.record_failure("miniflux", e)
+        runlog.record_stage("stage1", False, 0.0, f"{type(e).__name__}: {e}")
         return
 
-    summaries = stage2_summarize(articles, dry_run=args.dry_run)
+    with runlog.stage("stage1"):
+        articles = stage1_fetch(client, limit=args.limit)
+    if not articles:
+        logger.info("No hay artículos para procesar. Saliendo.")
+        # Sin artículos no hay informe, pero tampoco hay fallo: se declara para
+        # que el status sea `degraded` (exit 0) y no `failed`.
+        runlog.expect_no_report("sin artículos nuevos en Miniflux")
+        return
+
+    with runlog.stage("stage2"):
+        summaries = stage2_summarize(articles, dry_run=args.dry_run)
     summaries = dedup_by_cves(summaries)
     save_summaries_cache(summaries, date_str)
     ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str))
@@ -828,21 +905,53 @@ def main():
     if not args.dry_run and config.PROVIDER == "ollama":
         unload_model(config.SUMMARY_MODEL, config.OLLAMA_HOST)
 
-    correlation = stage25_correlate(summaries)
+    with runlog.stage("stage2.5"):
+        correlation = stage25_correlate(summaries)
     stage27_enrich(summaries, correlation)
-    trending    = stage26_history(summaries, date_str, correlation)
+    with runlog.stage("stage2.6"):
+        trending = stage26_history(summaries, date_str, correlation)
 
-    if getattr(config, "PHASE_REPORTS", False):
-        phase_outputs = stage3_phases(summaries, date_str, correlation, trending, dry_run=args.dry_run)
-        paths         = stage4_synthesis(phase_outputs, summaries, date_str, dry_run=args.dry_run)
-    else:
-        paths = stage3_report(summaries, date_str, correlation, trending, dry_run=args.dry_run)
-
+    paths = _report_stages(summaries, date_str, correlation, trending, args)
     paths.update(ioc_paths)
     _print_result(paths)
 
 
+def _report_stages(summaries, date_str, correlation, trending, args) -> dict[str, str]:
+    """Etapas 3 y 4 (o la 3 legacy), cronometradas para el manifiesto."""
+    if getattr(config, "PHASE_REPORTS", False):
+        with runlog.stage("stage3_phases"):
+            phase_outputs = stage3_phases(summaries, date_str, correlation, trending,
+                                          dry_run=args.dry_run)
+        with runlog.stage("stage4"):
+            return stage4_synthesis(phase_outputs, summaries, date_str, dry_run=args.dry_run)
+    with runlog.stage("stage3"):
+        return stage3_report(summaries, date_str, correlation, trending, dry_run=args.dry_run)
+
+
+def _week_label() -> str:
+    iso = datetime.now().isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
+def _show_last_run(as_json: bool = False) -> int:
+    """`--last-run`: reimprime el resumen de la corrida más reciente sin correr
+    nada. Es la forma de saber cómo salió el informe de hoy sin leer el log."""
+    path = runlog.find_latest_manifest(config.OUTPUT_DIR)
+    if path is None:
+        print(f"No hay manifiestos en {config.OUTPUT_DIR} "
+              f"(ninguna corrida instrumentada todavía).")
+        return 1
+    if as_json:
+        print(Path(path).read_text(encoding="utf-8"))
+        return 0
+    manifest = runlog.load_manifest(path)
+    print(manifest.summary_text())
+    print(f"  ({path})")
+    return manifest.exit_code()
+
+
 def _print_result(paths: dict) -> None:
+    runlog.record_report(paths)
     logger.info("\n" + "═" * 50)
     logger.info("  PIPELINE COMPLETADO ✓")
     logger.info("═" * 50)

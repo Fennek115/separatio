@@ -5,10 +5,17 @@ analyzer.py — Etapas 2 y 3 del pipeline.
 import json
 import logging
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 
+from separatio import runlog
+
 logger = logging.getLogger(__name__)
+
+# IOCs por artículo que entran al prompt (Stage 3 y fases). Lo que exceda se
+# registra como Drop y se declara al cierre de la corrida.
+PROMPT_IOCS_PER_ARTICLE = 8
 
 
 # ─────────────────────────────────────────────────────────
@@ -128,13 +135,19 @@ def build_report_prompt(summaries: list[ArticleSummary],
     # Recortamos al límite para controlar el tamaño del prompt de Stage 3.
     prompt_summaries = summaries[:article_limit] if article_limit else summaries
     omitted = len(summaries) - len(prompt_summaries)
+    runlog.record_drop("analyzer._format_phase_items",
+                       shown=len(prompt_summaries), total=len(summaries),
+                       detail="informe consolidado")
 
     items = []
     for i, s in enumerate(prompt_summaries, 1):
         cves_str     = ", ".join(s.cves) if s.cves else "ninguno"
         actors_str   = ", ".join(s.actors) if s.actors else "no identificados"
         affected_str = ", ".join(s.affected_systems) if s.affected_systems else "no especificado"
-        iocs_str     = ", ".join(s.iocs[:8]) if s.iocs else "ninguno"
+        iocs_str     = ", ".join(s.iocs[:PROMPT_IOCS_PER_ARTICLE]) if s.iocs else "ninguno"
+        runlog.record_drop("analyzer.build_report_prompt.iocs",
+                           shown=min(PROMPT_IOCS_PER_ARTICLE, len(s.iocs)),
+                           total=len(s.iocs), detail=s.title[:40])
         items.append(
             f"[{i}] [{s.severity}] [{s.threat_type}]\n"
             f"    Título: {s.title}\n"
@@ -273,13 +286,24 @@ def _get_api_key(provider: str) -> str:
 _TRUNCATED = {"length", "max_tokens", "MAX_TOKENS", "RECITATION"}
 
 
-def _log_usage(provider: str, in_tok: int, out_tok: int, finish: str, max_tokens: int) -> None:
+def _log_usage(provider: str, in_tok: int, out_tok: int, finish: str, max_tokens: int,
+               stage: str = "?", model: str = "", duration_s: float = 0.0) -> None:
+    """Registra el consumo de una llamada al LLM.
+
+    Hasta F-H esto era `logger.debug` con `basicConfig(level=INFO)`: el coste de
+    una corrida no aparecía en ningún lado. Ahora va a INFO y además al
+    manifiesto, donde se suma por corrida.
+    """
     pct = int(out_tok / max_tokens * 100) if max_tokens else 0
-    msg = f"  tokens: {in_tok} in / {out_tok} out ({pct}% of limit, finish={finish})"
+    msg = (f"  tokens [{stage}]: {in_tok} in / {out_tok} out "
+           f"({pct}% of limit, finish={finish}, {duration_s:.1f}s)")
     if finish in _TRUNCATED:
         logger.warning(f"TRUNCADO — output cortado por límite de tokens. {msg}")
     else:
-        logger.debug(msg)
+        logger.info(msg)
+    runlog.record_llm(stage=stage, model=model or provider,
+                      in_tok=in_tok, out_tok=out_tok, finish=finish,
+                      max_tokens=max_tokens, duration_s=duration_s)
 
 
 def _llm_chat(
@@ -294,8 +318,12 @@ def _llm_chat(
     thinking: bool = False,
     num_ctx: int = 4096,
     num_threads: int = 0,
+    stage: str = "?",
 ) -> str:
-    """Llamada LLM unificada para todos los proveedores. Devuelve texto limpio."""
+    """Llamada LLM unificada para todos los proveedores. Devuelve texto limpio.
+
+    `stage` sólo etiqueta la llamada en el log y el manifiesto (F-H)."""
+    t0 = time.monotonic()
     if provider == "ollama":
         import ollama
         client = ollama.Client(host=ollama_host, timeout=timeout)
@@ -312,7 +340,8 @@ def _llm_chat(
         in_tok  = response.get("prompt_eval_count", 0)
         out_tok = response.get("eval_count", 0)
         done_reason = response.get("done_reason", "stop")
-        _log_usage(provider, in_tok, out_tok, done_reason, max_tokens)
+        _log_usage(provider, in_tok, out_tok, done_reason, max_tokens,
+                   stage=stage, model=model, duration_s=time.monotonic() - t0)
         return _strip_llm_output(response["message"]["content"])
 
     elif provider == "claude":
@@ -327,7 +356,8 @@ def _llm_chat(
             messages=[{"role": "user", "content": user}],
         )
         _log_usage(provider, response.usage.input_tokens, response.usage.output_tokens,
-                   response.stop_reason, max_tokens)
+                   response.stop_reason, max_tokens,
+                   stage=stage, model=model, duration_s=time.monotonic() - t0)
         # Sonnet 5 / Opus 5 piensan por defecto: content puede empezar con
         # bloques "thinking" — quedarse solo con los bloques de texto.
         text = "".join(b.text for b in response.content if b.type == "text")
@@ -347,7 +377,9 @@ def _llm_chat(
         )
         usage  = response.usage
         finish = response.choices[0].finish_reason
-        _log_usage(provider, usage.prompt_tokens, usage.completion_tokens, finish, max_tokens)
+        _log_usage(provider, usage.prompt_tokens, usage.completion_tokens, finish,
+                   max_tokens, stage=stage, model=model,
+                   duration_s=time.monotonic() - t0)
         return _strip_llm_output(response.choices[0].message.content)
 
     elif provider == "gemini":
@@ -366,7 +398,9 @@ def _llm_chat(
         )
         meta   = response.usage_metadata
         finish = response.candidates[0].finish_reason.name if response.candidates else "UNKNOWN"
-        _log_usage(provider, meta.prompt_token_count, meta.candidates_token_count, finish, max_tokens)
+        _log_usage(provider, meta.prompt_token_count, meta.candidates_token_count,
+                   finish, max_tokens, stage=stage, model=model,
+                   duration_s=time.monotonic() - t0)
         return _strip_llm_output(response.text)
 
     else:
@@ -404,6 +438,7 @@ def summarize_article(
                 user=prompt,
                 provider=provider,
                 model=model,
+                stage="stage2",
                 max_tokens=max_tokens,
                 temperature=0.1,
                 ollama_host=ollama_host,
@@ -519,6 +554,7 @@ def generate_report(
                 model=model,
                 max_tokens=max_tokens,
                 temperature=0.3,
+                stage="stage3",
             )
             logger.info(f"  Informe generado ({provider})")
             return result
@@ -639,14 +675,24 @@ Escribe en español. Sé directo y orientado a la acción. No repitas detalles q
 
 
 def _format_phase_items(summaries: list[ArticleSummary],
-                        article_limit: int | None = None) -> tuple[list, list[str]]:
+                        article_limit: int | None = None,
+                        phase: str = "") -> tuple[list, list[str]]:
     top = summaries[:article_limit] if article_limit else summaries
+    # Dos recortes distintos y ambos silenciosos hasta F-H: artículos que no
+    # entran a la fase (esto sí se declara en el prompt) e IOCs por artículo
+    # (esto no se declaraba en ningún lado).
+    runlog.record_drop("analyzer._format_phase_items",
+                       shown=len(top), total=len(summaries),
+                       detail=phase or "fase")
     items = []
     for i, s in enumerate(top, 1):
         cves_str     = ", ".join(s.cves)            if s.cves            else "ninguno"
         actors_str   = ", ".join(s.actors)          if s.actors          else "no identificados"
         affected_str = ", ".join(s.affected_systems) if s.affected_systems else "no especificado"
-        iocs_str     = ", ".join(s.iocs[:8])        if s.iocs            else "ninguno"
+        iocs_str     = ", ".join(s.iocs[:PROMPT_IOCS_PER_ARTICLE]) if s.iocs else "ninguno"
+        runlog.record_drop("analyzer._format_phase_items.iocs",
+                           shown=min(PROMPT_IOCS_PER_ARTICLE, len(s.iocs)),
+                           total=len(s.iocs), detail=s.title[:40])
         items.append(
             f"[{i}] [{s.severity}] [{s.threat_type}]\n"
             f"    Título: {s.title}\n"
@@ -661,7 +707,7 @@ def _format_phase_items(summaries: list[ArticleSummary],
 def build_vuln_prompt(summaries: list[ArticleSummary], date_str: str,
                       correlation=None, article_limit: int | None = 50) -> str:
     sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    top, items = _format_phase_items(sorted_s, article_limit)
+    top, items = _format_phase_items(sorted_s, article_limit, "vulnerability")
 
     sev_dist  = Counter(s.severity for s in summaries)
     sev_line  = " | ".join(f"{s}: {sev_dist[s]}" for s in ["Crítica","Alta","Media","Baja","Informativa"] if sev_dist.get(s))
@@ -702,7 +748,7 @@ def build_threat_prompt(summaries: list[ArticleSummary], date_str: str,
                         correlation=None, trending=None,
                         article_limit: int | None = 35) -> str:
     sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    top, items = _format_phase_items(sorted_s, article_limit)
+    top, items = _format_phase_items(sorted_s, article_limit, "threat_intel")
 
     actor_cnt  = Counter(a for s in summaries for a in s.actors)
     top_actors = ", ".join(f"{a} ({n}x)" for a, n in actor_cnt.most_common(8)) or "ninguno"
@@ -743,7 +789,7 @@ REGLAS: No inventes actores ni IOCs. Si hay actores persistentes en trending, se
 def build_latam_prompt(summaries: list[ArticleSummary], date_str: str,
                        article_limit: int | None = 60) -> str:
     sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    top, items = _format_phase_items(sorted_s, article_limit)
+    top, items = _format_phase_items(sorted_s, article_limit, "latam")
 
     return f"""Fecha: {date_str}
 Artículos con relevancia LATAM: {len(summaries)}
@@ -774,7 +820,7 @@ REGLAS: Sé específico sobre países cuando los datos lo permitan. No extrapole
 def build_general_prompt(summaries: list[ArticleSummary], date_str: str,
                          article_limit: int | None = 20) -> str:
     sorted_s = sorted(summaries, key=lambda s: s.severity_score, reverse=True)
-    _top, items = _format_phase_items(sorted_s, article_limit)
+    _top, items = _format_phase_items(sorted_s, article_limit, "general")
 
     return f"""Fecha: {date_str}
 Artículos generales de ciberseguridad: {len(summaries)}
@@ -879,6 +925,7 @@ def generate_phase_report(
 
     system_prompt = SYSTEMS[phase]
     prompt        = BUILDERS[phase]()
+    t0            = time.monotonic()
 
     try:
         if provider == "ollama":
@@ -909,7 +956,9 @@ def generate_phase_report(
                         logger.info(f"  [{phase}] Generando... {total} tokens")
             done_reason = last_chunk.get("done_reason", "stop")
             in_tok = last_chunk.get("prompt_eval_count", 0)
-            _log_usage("ollama", in_tok, total, done_reason, max_tokens)
+            _log_usage("ollama", in_tok, total, done_reason, max_tokens,
+                       stage=f"phase:{phase}", model=model,
+                       duration_s=time.monotonic() - t0)
             logger.info(f"  [{phase}] Generado: {total} tokens (finish={done_reason})")
             return _strip_llm_output("".join(tokens))
         else:
@@ -918,6 +967,7 @@ def generate_phase_report(
                 user=prompt,
                 provider=provider,
                 model=model,
+                stage=f"phase:{phase}",
                 max_tokens=max_tokens,
                 temperature=0.3,
                 ollama_host=ollama_host,
@@ -955,6 +1005,7 @@ def generate_synthesis_report(
             user=prompt,
             provider=provider,
             model=model,
+            stage="synthesis",
             max_tokens=max_tokens,
             temperature=0.2,
             ollama_host=ollama_host,
@@ -992,6 +1043,7 @@ def generate_weekly_report(
             user=prompt,
             provider=provider,
             model=model,
+            stage="weekly",
             max_tokens=max_tokens,
             temperature=0.3,
             ollama_host=ollama_host,

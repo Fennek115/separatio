@@ -1,8 +1,170 @@
 # Central de inteligencia — capas, fuentes y dónde encaja cada cosa
 
 Escrito el 2026-08-07 a partir de conversaciones del usuario sobre arquitectura de intel y edge
-computing. **Es un documento de diseño/visión**, no de estado — nada de acá está implementado todavía.
+computing. **Es un documento de diseño/visión**, no de estado.
 Alimenta la sesión de *rediseño de `~/Projects/Intel/`* que ya está pendiente (ver `CLAUDE.md`).
+
+> ## ⚠️ Verificación contra el código (2026-08-08) — gana la máquina
+>
+> Se revisó el repo y **este documento subestimaba lo que ya está implementado**. Correcciones:
+>
+> - **GreyNoise ya está integrado** — `ipcheck/ip_enricher.py` lo consulta en `check_greynoise()`
+>   contra `https://api.greynoise.io/v3/community/{ip}`, endpoint **público sin API key**, en el
+>   **Nivel 1** de la cascada.
+>   > ⚠️ **Pero la nota original sobre Proton era correcta en el fondo, y peor de lo que parecía.**
+>   > Medido el 2026-08-09: sin API key la cuota real es **25 consultas por semana** (cabecera
+>   > `x-ratelimit-limit: 25`, ventana de 7 días — **no** las "10 por día" que dice la doc), y
+>   > **los 404 también consumen cuota**. Y la doc de GreyNoise nombra a ProtonMail **literalmente**:
+>   > *"Accounts created with free email accounts like Hotmail, Gmail, ProtonMail, iCloud, etc., do
+>   > not have API key-level access."* No te bloquean el alta: te dan cuenta sin API key. Con el
+>   > correo del usuario, registrarse **no sirve de nada**.
+>   > **Consecuencia de diseño:** GreyNoise no se puede usar para enriquecer cientos de IPs de
+>   > honeypot. Hay que reservarlo para el **residuo** (§ recomendación abajo).
+> - **abuse.ch está más cubierto de lo que dice la tabla.** `ipcheck` ya consulta **URLhaus**
+>   (`urlhaus-api.abuse.ch/v1/host/`) y **ThreatFox** (`threatfox-api.abuse.ch/api/v1/`), y desde
+>   el 2026-08-08 hay además un enricher **MalwareBazaar** propio (`enrichers/malwarebazaar.py`,
+>   ON). Falta solo Feodo Tracker y SSLBL.
+> - **Fuentes ya integradas:** ip-api, GreyNoise, Shodan InternetDB, AbuseIPDB, VirusTotal, OTX,
+>   URLhaus y ThreatFox (las 8 de `ipcheck`), más IPsum, OpenPhish, Ransomware.live, onion-lookup,
+>   MalwareBazaar y el honeypot propio como enrichers.
+> - **La capa 4 ya no es "por construir":** el colector pull está operativo y automatizado en el
+>   CT 113 desde el 2026-08-08 (ver `Motherbase/honeypot/COLECTOR-CT113.md`).
+>
+> ### El gap real que esto destapa
+>
+> **Los enrichers solo se aplican a los IOCs extraídos de las NOTICIAS.** En
+> `enrichment.run_enrichment()` se hace `iocs = collect_iocs(summaries)`: el universo a enriquecer
+> son los indicadores que aparecen en los artículos del día. Las IPs que atacan tu honeypot
+> **nunca pasan por esa cascada** — salvo que casualmente salgan en una noticia.
+>
+> El cruce existente va en una sola dirección: *"¿esta IP de la que hablan los feeds además me
+> pegó?"*. Falta la inversa, que es justamente la pregunta de estudio: *"esta IP me pegó, ¿es
+> actor conocido o ruido de internet?"*. La cascada de `ipcheck` (GreyNoise → decidir nivel →
+> AbuseIPDB/VT/OTX) **ya sabe responder eso**; simplemente nadie la invoca con las IPs del
+> honeypot. Es un enricher nuevo, no una capacidad nueva.
+
+---
+
+## Verificación de los feeds candidatos (2026-08-08, por HTTP directo)
+
+No se creyó a la awesome-list: se pidió cada feed y se miró el contenido.
+
+| Feed | Estado | Frescura medida | Volumen | Veredicto |
+|---|---|---|---|---|
+| **jamesbrine `iplist.txt`** | ✅ 200 | `Last-Modified` **2 h antes** (declara cada 30 min) | **1.063.680 IPv4**, 0 líneas malformadas | ✅ **El mejor del lote.** Es *el* feed a usar |
+| **jamesbrine `/csv`** | ✅ 200 | ventana móvil 7 d, hasta 2026-08-06 | 10 MB, 221.564 filas | ⚠️ **Usar `iplist.txt` en su lugar** — ver defectos abajo |
+| **jamesbrine STIX2** | ✅ 200 **con UA de navegador** | bundle del 2026-08-06 | 11.099 objetos (5.450 indicadores) | ✅ Lo más rico gratis: sensor, protocolo, kill-chain, CVE |
+| **FireHOL** | ✅ 200 | último commit **2026-08-08**; `firehol_level2` declara *update 1 min* | level1 3.891 subnets · abuseipdb_30d 105.027 · blocklist_de_ssh 4.891 · tor_exits 1.415 | ✅ Solo 2 ficheros — el resto es redundante |
+| **IPsum** | ✅ 200 | último commit **2026-08-09** | L1 113.228 → L3 16.782 → L5 1.947 | ✅ **Ya integrado.** Cada línea trae en cuántas listas aparece |
+| **CINS `ci-badguys.txt`** | ✅ 200 | `Last-Modified` de hoy | **exactamente 15.000** (cap duro desde 2017) | ❌ 89 % ya contenido en IPsum |
+| **DigitalSide** | ❌ **sitio no responde** (timeout HTTP y HTTPS) | repo: **último commit 2024-10-18** | congelado | ❌ **Muerto hace ~22 meses** |
+| **Pulsedive** | ✅ vivo | — | sin bulk gratis | ❌ ToS prohíben automatización *y* redistribución |
+| **GreyNoise community** | ✅ sin API key | — | **25 consultas/semana** | ⚠️ Ya integrado, pero cuota ínfima — ver arriba |
+
+### Defectos reales del `/csv` de jamesbrine (medidos, no documentados en ningún lado)
+
+1. **Es acumulativo, no incremental.** De las 32.597 IPs del 2026-08-05, **32.596 se repiten** al día
+   siguiente: solo **241 son nuevas**. Leerlo como "32k IPs nuevas por día" es un error de lectura.
+2. **~3,5 % de las filas están corruptas** (7.854 de 221.564) por saltos de línea perdidos:
+   `103101.66.10.237`, `1031.10.144.169`. Se verificó que el fichero coincide byte a byte con el
+   `Content-Length`, así que **la corrupción viene del feed**, no del transporte.
+3. Un solo valor en `activity`: `brute force host`.
+
+### Sub-feeds de jamesbrine: separar vivos de muertos
+
+Vivos: `iplist.txt` (2026-08-08), `/protocols/` (2026-08-08), Tor exits en `/anonproxies/`
+(2026-08-08), `/phishing/` (2026-08-07). Rezagado: proxies anónimos (2026-07-29).
+**Muerto: `/forumspam/` — última actualización 2024-08-16.**
+
+> ⚠️ **Dos trampas de automatización:** el JSON de STIX2 devuelve **403 con el User-Agent por
+> defecto** de curl (con UA de navegador da 200). Y la API de GitHub reporta commits viejos para
+> FireHOL aunque el contenido esté fresco — mirar el `Source File Date` de la cabecera del
+> `.netset`, no la fecha del commit.
+
+### Licencias
+
+- **jamesbrine:** TLP:White, *"free to use in any form for non-commercial purposes"* — **encaja
+  exacto** con el uso de estudio personal.
+- **FireHOL: no hay licencia.** El repo **no tiene fichero `LICENSE`**; cada ipset hereda la de su
+  fuente original, y algunas son restrictivas. No tratarlo como un bloque.
+- **CINS:** no hay términos formales. No prohíbe nada — permisivo por omisión, no por licencia.
+- **Pulsedive:** la más restrictiva. Prohíbe robots/automatización y redistribución.
+
+---
+
+## La conclusión que ordena todo: las blocklists agregadas son casi el mismo fichero
+
+Solapamientos medidos el 2026-08-09:
+
+| Cruce | Solapamiento |
+|---|---|
+| **IPsum L3 ∩ AbuseIPDB 30d** | **98,0 %** |
+| CINS ∩ IPsum L1 | 89,1 % |
+| IPsum L3 ∩ jamesbrine | 79,5 % |
+| AbuseIPDB 30d ∩ jamesbrine | 47,1 % |
+
+**Sumar una cuarta blocklist agregada no aporta casi nada**: todas responden la misma pregunta,
+*"¿alguien más reportó esta IP?"*.
+
+Y el punto conceptual que cambia el diseño: **un acierto en blocklist no distingue "actor conocido"
+de "ruido" — es la definición misma de ruido.** Que una IP esté en IPsum significa que atacó a
+mucha otra gente: confirma que sos *uno más* en la lista.
+
+**Lo valioso de GreyNoise es el resultado NEGATIVO.** Si una IP te pegó y GreyNoise devuelve 404 o
+`noise: false`, no está escaneando internet masivamente — y eso es lo único que se parece a "esto
+podría ir dirigido a mí". Ninguna blocklist puede dar esa señal, porque solo tienen positivos.
+
+**Caso concreto que lo demuestra** (`1.14.206.78`, del STIX de jamesbrine del 2026-08-06): ausente
+de IPsum L1/L3, CINS, AbuseIPDB 30d y blocklist_de_ssh — las cinco. GreyNoise la clasifica
+`malicious`, `noise: true`, vista el 2026-08-08.
+
+### Arquitectura recomendada (forzada por la cuota de 25/semana)
+
+1. **Base local:** `jamesbrine.com.au/iplist.txt` — 1,06 M IPs, sin key, TLP:White no comercial,
+   cada 30 min. Y es el feed que **más se parece a nuestro sensor**: SSH/Telnet/portscan de
+   honeypots reales, no reportes de terceros.
+2. **Score de confianza:** IPsum `levels/3.txt` — ya integrado; cada línea trae el número de listas
+   en que aparece, o sea confianza incorporada y gratis.
+3. **Solo dos ficheros de FireHOL**, los no redundantes: `tor_exits.ipset` (anonimización) y
+   `firehol_level1.netset` (bogons/secuestros: señal de *infraestructura*, no de conducta).
+4. **GreyNoise para el residuo:** reservar las ~25 consultas semanales para las IPs que pegaron y
+   **no** están en ninguna lista local. Ese subconjunto es chico y es el interesante.
+5. **Descartar:** DigitalSide (muerto), CINS (89 % redundante y capado), Pulsedive (sin bulk gratis
+   y ToS restrictivos).
+
+> **Advertencia honesta:** ninguna fuente gratuita va a decir "esto es APT-X". En el tier gratis,
+> *"actor conocido"* significa realistamente *"escáner masivo conocido"* o *"abusador ya reportado"*.
+> La atribución a un actor no está disponible gratis en ninguna de las seis.
+
+### Feodo Tracker y SSLBL — medidos el 2026-08-09: **NO integrar**
+
+Eran el "falta solo…" de abuse.ch. Se pidieron y están vacíos:
+
+| Fichero | Entradas útiles |
+|---|---|
+| `feodotracker.abuse.ch/downloads/ipblocklist.json` | **5** (Emotet, QakBot) |
+| `feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt` | **0** |
+| `sslbl.abuse.ch/blacklist/sslipblacklist.csv` | **1** |
+| `sslbl.abuse.ch/blacklist/sslblacklist.csv` | 10.355 — pero son **SHA-1 de certificados TLS** |
+
+Los dos primeros no tienen volumen. El de fingerprints sí, pero requiere inspeccionar el
+certificado de una conexión TLS, y **ni Cowrie ni Beelzebub lo hacen**. Con esto, la cobertura de
+abuse.ch queda **cerrada**: lo que faltaba no valía la pena.
+
+### El plan de ejecución
+
+Todo lo de arriba se convierte en fases concretas en **[`PLAN-REWORK.md`](PLAN-REWORK.md)**, que es
+el documento activo. Este archivo es el inventario de fuentes; aquel es qué hacer con ellas.
+
+### No verificado
+
+- La cadencia de 30 min de `iplist.txt` (se observó un solo `Last-Modified`, no se muestreó).
+- Si GreyNoise **rechaza el alta** con Proton o solo niega la API key — la doc solo afirma lo segundo.
+- Límites de la cuenta gratis registrada de Pulsedive (50/día, 500/mes): de su página de precios,
+  no medidos.
+- Si `osint.digitalside.it` está caído de forma permanente o transitoria.
+- **`PULSEDIVE_API_KEY` está en el `.env` pero ningún código del repo la usa** — declarada y sin
+  consumir. Con los ToS verificados, conviene **quitarla**.
 
 > **Regla heredada:** verificar contra la máquina, no contra el documento. Y una específica de acá:
 > **Separatio ya es el cerebro CTI** — no se construye una plataforma nueva. Las fuentes nuevas entran

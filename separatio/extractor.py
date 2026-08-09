@@ -11,6 +11,8 @@ from bs4 import BeautifulSoup
 import trafilatura
 import requests
 
+from separatio import runlog
+
 logger = logging.getLogger(__name__)
 
 
@@ -135,6 +137,11 @@ def extract_article_text(article, timeout: int = 15,
         return partial
 
     logger.warning(f"[fallback] Solo título disponible: {article.title}")
+    # El artículo entra al LLM sin cuerpo: es el recorte más caro de todos y
+    # hasta F-H sólo dejaba un WARNING suelto en el log.
+    runlog.record_drop("extractor.extract_article_text",
+                       shown=0, total=1, kind="failure",
+                       detail=article.title[:60])
     return article.title
 
 
@@ -142,10 +149,16 @@ def truncate_text(text: str, max_tokens_approx: int = 800) -> str:
     """
     Trunca el texto para no exceder el contexto del modelo.
     Estimación: 1 token ≈ 4 caracteres en inglés, ~3.5 en español.
+
+    Registra el recorte en el manifiesto de la corrida (F-H): es la función que
+    conoce el largo original y el recortado, así que lo anota ella misma en vez
+    de devolver un segundo valor que obligaría a tocar el call site.
     """
     max_chars = max_tokens_approx * 4
     if len(text) <= max_chars:
         return text
+    runlog.record_drop("extractor.truncate_text", kind="truncate",
+                       shown=max_chars, total=len(text))
     # Cortar en límite de párrafo para no partir oraciones
     truncated = text[:max_chars]
     last_newline = truncated.rfind("\n")
