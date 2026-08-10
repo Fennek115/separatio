@@ -402,6 +402,14 @@ levantar otro. Una corrida one-shot sobre el journal histórico —hecha para me
 reales al LAPI con `created_at` de ahora. No llegó nada al store (ninguna coincidía con las IPs del
 honeypot) y caducaban en ~4 h, pero la medición correcta es `cscli metrics` sobre el servicio vivo.
 
+**Beelzebub, la misma trampa respondida al revés.** Su log tampoco rotaba (~240 KB/día, y logrotate
+tampoco estaba instalado en ivory). Pero acá `copytruncate` **sí** es seguro: el fd tiene flags
+`02102002`, o sea `O_APPEND`, verificado en `/proc/<pid>/fdinfo` **y** probado forzando una rotación
+—2.268 bytes, 0 NULs— contra los 998.071 NULs de Cowrie. Quedó con logrotate a 14 días y el
+`hp-readonly` de ivory sirviendo `beelzebub.json.1` + el vivo (375 = 371 + 4). La regla general:
+`copytruncate` no es seguro ni inseguro por sí mismo, depende de `O_APPEND`; se mira antes de
+escribir la config.
+
 Y `pct resize 113 rootfs +4G`: el CT pasó de 4 a 8 G, en caliente. El corpus de payloads pasó de 2
 a 302 en una tarde.
 
