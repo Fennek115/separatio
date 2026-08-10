@@ -6,9 +6,9 @@ código de Separatio y contra fuentes externas. Reemplaza a la versión anterior
 Ordena en una sola arquitectura: el pipeline **Separatio** (`~/Projects/Intel/threat intel`), la
 librería **ipcheck**, el honeypot, las VMs de Oracle, Cloudflare, y las fuentes nuevas de leak sites.
 
-Documentos hermanos: [`LABS-PLAN.md`](LABS-PLAN.md) (qué entra en este hardware),
-[`HARDENING-PLAN.md`](HARDENING-PLAN.md) §1.4 (memoria y zram),
-[`honeypot/PLAN.md`](honeypot/PLAN.md), [`redteam-lab-context/ESTADO-Y-REDISENO.md`](redteam-lab-context/ESTADO-Y-REDISENO.md).
+Documentos hermanos: [`LABS-PLAN.md`](../../Motherbase/LABS-PLAN.md) (qué entra en este hardware),
+[`HARDENING-PLAN.md`](../../Motherbase/HARDENING-PLAN.md) §1.4 (memoria y zram),
+[`honeypot/PLAN.md`](honeypot/PLAN.md), [`redteam-lab-context/ESTADO-Y-REDISENO.md`](../../Motherbase/redteam-lab-context/ESTADO-Y-REDISENO.md).
 
 ---
 

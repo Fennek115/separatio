@@ -77,7 +77,7 @@ en producción**.
 
 No hay que construir nada nuevo. Hay que rescatar el código, arreglar cuatro desajustes y encenderlo.
 
-Detalle completo en [`../INTEL-ARQUITECTURA.md`](../INTEL-ARQUITECTURA.md) §1 y §3.
+Detalle completo en [`../INTEL-ARQUITECTURA.md`](../ARQUITECTURA.md) §1 y §3.
 
 ---
 
@@ -232,5 +232,5 @@ Después el cron (~5 min por corrida con cloud, todas las categorías en una):
 1. Marcar F0 como ☑ en [`../ESTADO.md`](../ESTADO.md) y acá arriba.
 2. Actualizar el `README.md` de Separatio: el CT 111 de Ollama ya no existe y la sección de
    infraestructura describe algo que no está.
-3. Anotar en [`../INVENTARIO.md`](../INVENTARIO.md) el CT nuevo si se creó uno.
+3. Anotar en [`../INVENTARIO.md`](../../../Motherbase/INVENTARIO.md) el CT nuevo si se creó uno.
 4. F2 y F4 quedan desbloqueadas.

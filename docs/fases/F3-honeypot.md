@@ -24,7 +24,7 @@ cuánto es plantilla tonta. El marco conceptual —que salió del caso `ft-corre
 poblaciones: **mass-exploiters** que escanean para *plantar* shells, y **shell-finders** que cazan
 shells ya existentes de otros para parasitarlos.
 
-**Decisiones ya tomadas** (no re-litigar, detalle en [`../LABS-PLAN.md`](../LABS-PLAN.md) §2):
+**Decisiones ya tomadas** (no re-litigar, detalle en [`../LABS-PLAN.md`](../../../Motherbase/LABS-PLAN.md) §2):
 
 - **T-Pot descartado.** 47 puertos TCP + 9 UDP que colisionan con 22/80/443/53; el instalador
   reescribe el `sshd_config` del host y pone el firewall en ACCEPT; pide 16 GB de RAM.
@@ -62,7 +62,7 @@ la primera conexión saliente. Se construye en la Security List del proveedor, f
 
 ## Paso 3 — El catch-all
 
-Config completa y comentada en [`../honeypot/PLAN.md`](../honeypot/PLAN.md).
+Config completa y comentada en [`../honeypot/PLAN.md`](../../../Motherbase/honeypot/PLAN.md).
 
 ⚠️ **La receta que circula está mal y falla en silencio.** `client_body_in_file_only on` —que por el
 nombre suena como la directiva clave— es la que **rompe** `$request_body`. Va **`clean`**. Y
@@ -103,6 +103,6 @@ para este cruce.
 ## Al terminar
 
 1. Marcar F3 como ☑ en [`../ESTADO.md`](../ESTADO.md).
-2. Actualizar [`../honeypot/PLAN.md`](../honeypot/PLAN.md) con lo realmente desplegado.
+2. Actualizar [`../honeypot/PLAN.md`](../../../Motherbase/honeypot/PLAN.md) con lo realmente desplegado.
 3. Actualizar `ESTADO-Y-REDISENO.md`: el punto 4 del orden sugerido queda hecho.
 4. **F4 gana su tool más valioso** (`cruce_honeypot`).

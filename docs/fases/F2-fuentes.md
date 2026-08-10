@@ -134,4 +134,4 @@ agregador de terceros que junte diez claves en un proceso sin auditar.
 ## Al terminar
 
 1. Marcar F2 como ☑ en [`../ESTADO.md`](../ESTADO.md).
-2. Actualizar la tabla de capas de [`../INTEL-ARQUITECTURA.md`](../INTEL-ARQUITECTURA.md) §2.
+2. Actualizar la tabla de capas de [`../INTEL-ARQUITECTURA.md`](../ARQUITECTURA.md) §2.
