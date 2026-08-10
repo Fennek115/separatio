@@ -420,3 +420,52 @@ bytes**, y el único fichero que bajó Cowrie es una **clave pública RSA de 389
 
 As-built completo, con las trampas y las verificaciones, en
 `~/Projects/Motherbase/honeypot/EXPONER.md` §CrowdSec y §La rotación de Cowrie.
+
+---
+
+## GreyNoise ON y registro de inteligencia en los prompts (2026-08-10)
+
+Sesión de afinado, no una fase del rework. Commit `9021fa0`, desplegado al CT 113
+(`1ce77ce → 9021fa0`, sin dependencias nuevas y sin variables nuevas, así que **no
+hizo falta reinstalar**). 350 tests.
+
+**1. `ENRICHERS["honeypot_recon"]` pasa a `True`.** El comentario de F-C decía "prender
+al verificar con tráfico real"; hay tráfico real desde que se expusieron los honeypots.
+El presupuesto no se tocó: 20 consultas/semana, `RECON_MAX_ESCALATE=5` por corrida, y el
+triage de 4 etapas filtra con las listas locales de F-E antes de gastar cuota. Verificado
+en el CT: el registry levanta `HoneypotReconEnricher`.
+
+**2. El informe narraba el pipeline en vez del panorama.** Medido sobre la corrida real
+del 2026-08-10: *"La corrida de hoy procesó 41 artículos"*, *"según la clasificación
+provista"*, y **"El equipo no encontró incidentes LATAM"** — que inventa un sujeto
+colectivo inexistente, o sea una afirmación falsa sobre el origen del juicio. El modelo
+escribe lo que se le da, así que el arreglo va en el prompt:
+
+- **`_DOCTRINE_RULE`** en las cinco salidas: prohíbe narrar pipeline/corrida/caché/feeds
+  y el conteo de artículos, **pero deja pasar los números de amenaza** (cuántos CVEs, qué
+  severidad, cuántas víctimas) — la distinción es la que importa: eso es sustancia, no
+  telemetría de la colección. Prohíbe el sujeto colectivo. Pide lenguaje estimativo
+  calibrado (*casi seguro / muy probable / probable / poco probable*) sin porcentajes
+  inventados. Y separa **confianza** (calidad y corroboración de la fuente) de
+  **probabilidad** (factibilidad del hecho), que son ejes independientes.
+- **`## Juicios Clave`** en la síntesis: 3-5 juicios numerados con confianza cada uno, y
+  la regla de que una fuente sin corroborar no puede dar confianza alta.
+- **"Limitaciones de esta corrida" → "Brechas de colección"**. No es cosmético:
+  *limitación* se lee como "se miró y no había nada"; *brecha de colección* dice "no se
+  miró", que es lo que de verdad pasó. Mismo criterio en el encabezado del bloque de
+  `runlog.coverage_block()`, que además ahora se declara **diagnóstico interno a
+  traducir, no a citar**.
+
+**Hallazgo de la sesión:** el vocabulario del prompt es contagioso. El bloque de cobertura
+de F-H/F-I estaba escrito en jerga de ejecución ("artículos truncados", "se muestran 20 de
+105") y el modelo lo copiaba literal al informe. Profesionalizar la **entrada** es lo que
+mueve la salida; no alcanza con pedirle al final que escriba bonito.
+
+**PENDIENTE explícito:** los tests fijan que la instrucción **llegue** al prompt, no que el
+modelo la **obedezca** — es exactamente el hallazgo de F-I ("darle el dato al modelo no
+alcanza, hay que pedirle que lo escriba"), y puede repetirse acá. Verificar contra la
+salida real de la corrida de las 07:00 del 2026-08-11, o con un A/B sobre
+`summaries-cache-2026-08-10.json` (se saltea Stage 2, ~$0,40).
+
+**No verificado tampoco:** GreyNoise todavía no gastó una consulta real. La primera se la
+lleva la corrida que encuentre una IP que sobreviva al triage.
