@@ -15,6 +15,13 @@ from separatio import runlog
 
 logger = logging.getLogger(__name__)
 
+# trafilatura emite un WARNING ("discarding data: None") cada vez que descarta
+# un documento por texto insuficiente, idioma o duplicado — control de flujo
+# normal suyo, no un fallo nuestro (si el texto no alcanza, ya caemos al
+# fallback de requests+BeautifulSoup abajo). Cosmético, visto desde F0; se baja
+# a ERROR para no ensuciar pipeline.log (F-G G-7).
+logging.getLogger("trafilatura").setLevel(logging.ERROR)
+
 
 def _domain(url: str) -> str:
     try:

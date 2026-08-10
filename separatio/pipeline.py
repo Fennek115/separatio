@@ -9,12 +9,10 @@ Uso:
 """
 
 import argparse
-import csv
 import json
 import logging
 import logging.handlers
 import os
-import re
 import sys
 import time
 from collections import defaultdict
@@ -38,6 +36,14 @@ from separatio.analyzer import (ArticleSummary, summarize_article, generate_repo
 from separatio.correlator import build_correlation_context, CorrelationContext
 from separatio.history import load_history, append_daily_record, save_history, build_trending_context, TrendingContext
 from separatio.reporter import save_report
+# F-G/G-3: lo que antes vivía acá adentro. Se reexporta con el import para que
+# `pipeline.dedup_by_cves` / `pipeline.export_iocs` / `pipeline.group_by_phase`
+# sigan resolviendo igual que antes.
+from separatio.deduplicator import dedup_by_cves
+from separatio.ioc_processor import detect_ioc_type, export_iocs
+from separatio.router import (CANONICAL_PHASES, CORRELATED_PHASES, group_by_phase,
+                              phase_order as _phase_order, receives_correlation,
+                              receives_trending)
 
 Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -101,117 +107,6 @@ def load_summaries_cache(date_str: str) -> list[ArticleSummary]:
     summaries = [ArticleSummary(**{k: v for k, v in d.items() if k in known}) for d in data]
     logger.info(f"Cargados {len(summaries)} resúmenes del caché")
     return summaries
-
-
-# ─────────────────────────────────────────────
-# DEDUPLICACIÓN SEMÁNTICA (post Stage 2)
-# ─────────────────────────────────────────────
-
-def dedup_by_cves(
-    summaries: list[ArticleSummary],
-    min_shared: int = 2,
-    min_jaccard: float = 0.4,
-) -> list[ArticleSummary]:
-    """Fusiona resúmenes que cubren el mismo grupo de CVEs."""
-    sorted_idx = sorted(range(len(summaries)), key=lambda i: -summaries[i].severity_score)
-    absorbed: set[int] = set()
-
-    for pos_a, idx_a in enumerate(sorted_idx):
-        if idx_a in absorbed or not summaries[idx_a].cves:
-            continue
-        cves_a = set(summaries[idx_a].cves)
-        for idx_b in sorted_idx[pos_a + 1:]:
-            if idx_b in absorbed or not summaries[idx_b].cves:
-                continue
-            cves_b = set(summaries[idx_b].cves)
-            shared = len(cves_a & cves_b)
-            if shared < min_shared:
-                continue
-            if shared / len(cves_a | cves_b) >= min_jaccard:
-                absorbed.add(idx_b)
-                s_a, s_b = summaries[idx_a], summaries[idx_b]
-                s_a.iocs   = list({*s_a.iocs,   *s_b.iocs})[:20]
-                s_a.actors = list({*s_a.actors, *s_b.actors})[:10]
-
-    result = [s for i, s in enumerate(summaries) if i not in absorbed]
-    if absorbed:
-        logger.info(
-            f"Dedup semantica (CVE): {len(summaries)} → {len(result)} "
-            f"resumenes ({len(absorbed)} consolidados)"
-        )
-    return result
-
-
-# ─────────────────────────────────────────────
-# EXPORT IOCs
-# ─────────────────────────────────────────────
-
-def _detect_ioc_type(ioc: str) -> str:
-    ioc = ioc.strip()
-    if re.match(r"^\d{1,3}(\.\d{1,3}){3}(:\d+)?$", ioc):
-        return "ip"
-    if re.match(r"^[0-9a-fA-F]{64}$", ioc):
-        return "sha256"
-    if re.match(r"^[0-9a-fA-F]{40}$", ioc):
-        return "sha1"
-    if re.match(r"^[0-9a-fA-F]{32}$", ioc):
-        return "md5"
-    if ioc.startswith(("http://", "https://")):
-        return "url"
-    if re.match(r"^[a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}$", ioc):
-        return "domain"
-    return "other"
-
-
-def export_iocs(
-    summaries: list[ArticleSummary], date_str: str, output_dir: str
-) -> dict[str, str]:
-    """Exporta todos los IOCs únicos de los resúmenes a CSV y JSON."""
-    rows = []
-    for s in summaries:
-        for ioc in s.iocs:
-            rows.append({
-                "date":     date_str,
-                "ioc":      ioc.strip(),
-                "type":     _detect_ioc_type(ioc),
-                "severity": s.severity,
-                "title":    s.title,
-                "feed":     s.feed_title,
-                "cves":     "|".join(s.cves),
-            })
-
-    if not rows:
-        return {}
-
-    seen: set[str] = set()
-    unique = [r for r in rows if r["ioc"] not in seen and not seen.add(r["ioc"])]  # type: ignore[func-returns-value]
-
-    safe_date = date_str.replace(" ", "_").replace("/", "-")
-    paths: dict[str, str] = {}
-
-    iocs_dir = os.path.join(output_dir, "iocs")
-    Path(iocs_dir).mkdir(parents=True, exist_ok=True)
-
-    csv_path = os.path.join(iocs_dir, f"iocs-{safe_date}.csv")
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=["date", "ioc", "type", "severity", "title", "feed", "cves"]
-        )
-        writer.writeheader()
-        writer.writerows(unique)
-    paths["iocs_csv"] = csv_path
-
-    by_type: dict[str, list] = defaultdict(list)
-    for row in unique:
-        by_type[row["type"]].append(row)
-
-    json_path = os.path.join(iocs_dir, f"iocs-{safe_date}.json")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(dict(by_type), f, ensure_ascii=False, indent=2)
-    paths["iocs_json"] = json_path
-
-    logger.info(f"IOCs exportados: {len(unique)} unicos → {csv_path}")
-    return paths
 
 
 # ─────────────────────────────────────────────
@@ -284,29 +179,6 @@ def run_weekly(days: int = 7) -> None:
     ioc_paths = export_iocs(all_summaries, week_label, weekly_dir)
     paths.update(ioc_paths)
     _print_result(paths)
-
-
-# ─────────────────────────────────────────────
-# AGRUPACIÓN POR FASE (auto-escala con nuevos feeds)
-# ─────────────────────────────────────────────
-
-def group_by_phase(summaries: list[ArticleSummary]) -> dict[str, list[ArticleSummary]]:
-    """
-    Agrupa resúmenes por fase según PHASE_CATEGORY_MAP.
-    Categorías no mapeadas → 'general' automáticamente.
-    Agregar feeds en Miniflux no requiere cambios de código.
-    """
-    cat_map = getattr(config, "PHASE_CATEGORY_MAP", {})
-    cat_to_phase: dict[str, str] = {
-        cat.lower(): phase
-        for phase, cats in cat_map.items()
-        for cat in cats
-    }
-    phases: dict[str, list[ArticleSummary]] = defaultdict(list)
-    for s in summaries:
-        phase = cat_to_phase.get(s.feed_category.lower(), "general")
-        phases[phase].append(s)
-    return dict(phases)
 
 
 # ─────────────────────────────────────────────
@@ -638,10 +510,9 @@ def stage3_report(summaries: list[ArticleSummary],
 # ETAPA 3 MULTI-FASE + ETAPA 4 SÍNTESIS
 # ─────────────────────────────────────────────
 
-# Fases que reciben CorrelationContext (KEV/EPSS y CVEs corroborados). LATAM y
-# general quedan afuera a propósito: ahí un listado de CVEs en KEV es ruido.
-# El **enrichment** ya no sigue esta lista — desde F-I va a las cuatro fases.
-CORRELATED_PHASES = ("vulnerability", "threat_intel")
+# El ruteo (qué artículo va a qué fase, y qué contexto recibe cada una) vive en
+# `separatio/router.py` desde F-G/G-3. `CORRELATED_PHASES` se importa arriba y
+# se reexporta desde acá por compatibilidad.
 
 
 def stage3_phases(
@@ -659,11 +530,7 @@ def stage3_phases(
 
     valid = [s for s in summaries if s.error is None]
     phases = group_by_phase(valid)
-
-    # Orden canónico; claves extra de PHASE_CATEGORY_MAP se agregan al final
-    canonical = ["vulnerability", "threat_intel", "latam", "general"]
-    extra = [p for p in (getattr(config, "PHASE_CATEGORY_MAP", {}) or {}) if p not in canonical]
-    phase_order = canonical + extra
+    phase_order = _phase_order()
 
     phase_models     = getattr(config, "PHASE_MODELS",         {}) or {}
     phase_max_tokens = getattr(config, "PHASE_MAX_TOKENS",     {}) or {}
@@ -676,8 +543,8 @@ def stage3_phases(
     # de correlación para que el manifiesto no dé a entender que todas las fases
     # ven lo mismo.
     if correlation is not None:
-        con_ctx = [p for p in phase_order if p in CORRELATED_PHASES and phases.get(p)]
-        sin_ctx = [p for p in phase_order if p not in CORRELATED_PHASES and phases.get(p)]
+        con_ctx = [p for p in phase_order if receives_correlation(p) and phases.get(p)]
+        sin_ctx = [p for p in phase_order if not receives_correlation(p) and phases.get(p)]
         if sin_ctx:
             runlog.record_drop(
                 "pipeline.stage3_phases.correlation", kind="filter",
@@ -717,8 +584,8 @@ def stage3_phases(
             max_tokens=max_tok,
             provider=config.PROVIDER,
             article_limit=art_limit,
-            correlation=correlation if phase in CORRELATED_PHASES else None,
-            trending=trending       if phase == "threat_intel"    else None,
+            correlation=correlation if receives_correlation(phase) else None,
+            trending=trending       if receives_trending(phase)    else None,
             enrichment=enrichment,
         )
 
@@ -757,10 +624,12 @@ def stage4_synthesis(
             provider=config.PROVIDER,
         )
 
-    # Síntesis al frente, luego las fases en orden canónico
-    phase_order = ["vulnerability", "threat_intel", "latam", "general"]
+    # Síntesis al frente, luego las fases en orden canónico. Ojo: acá van sólo
+    # las canónicas, no `router.phase_order()` — una clave extra de
+    # PHASE_CATEGORY_MAP se genera en Stage 3 pero nunca se ensambló en el
+    # informe final. Se preserva tal cual (F-G/G-3 no cambia conducta).
     parts = [synthesis_md]
-    for phase in phase_order:
+    for phase in CANONICAL_PHASES:
         if phase in phase_outputs:
             parts.append(phase_outputs[phase])
 
@@ -865,10 +734,10 @@ def _run(args, date_str: str) -> None:
         with runlog.stage("cache"):
             summaries = load_summaries_cache(date_str)
         runlog.record_count("articulos_cache", len(summaries))
-        ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str))
         with runlog.stage("stage2.5"):
             correlation = stage25_correlate(summaries)
         enrichment = stage27_enrich(summaries)
+        ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str), enrichment)
         paths = _report_stages(summaries, date_str, correlation, None, args, enrichment)
         paths.update(ioc_paths)
         _print_result(paths)
@@ -901,7 +770,6 @@ def _run(args, date_str: str) -> None:
         summaries = stage2_summarize(articles, dry_run=args.dry_run)
     summaries = dedup_by_cves(summaries)
     save_summaries_cache(summaries, date_str)
-    ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str))
 
     if config.MARK_AS_READ and not args.no_mark_read and not args.dry_run:
         client.mark_as_read([a["article_id"] for a in articles])
@@ -912,6 +780,7 @@ def _run(args, date_str: str) -> None:
     with runlog.stage("stage2.5"):
         correlation = stage25_correlate(summaries)
     enrichment = stage27_enrich(summaries)
+    ioc_paths = export_iocs(summaries, date_str, _dated_dir(date_str), enrichment)
     with runlog.stage("stage2.6"):
         trending = stage26_history(summaries, date_str, correlation)
 

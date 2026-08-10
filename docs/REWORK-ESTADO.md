@@ -3,7 +3,7 @@
 > **Si estás empezando una sesión del rework, leé este archivo primero y nada más.**
 > Te dice en qué fase está, qué sigue, y qué archivo abrir para hacerlo.
 
-Última actualización: **2026-08-09** (cierre de F-I)
+Última actualización: **2026-08-09** (cierre de F-G/G-3 — modularización de `pipeline.py`)
 
 Diseño y fundamentos: [`PLAN-REWORK.md`](PLAN-REWORK.md) (el *qué* y el *por qué*).
 Este archivo es el *cuándo* y el *cómo se ejecuta*.
@@ -33,7 +33,7 @@ hecha.
 Desde `~/Projects/Intel`, pegar esto cambiando la fase:
 
 ```
-Continuamos el rework. Leé docs/REWORK-ESTADO.md y después docs/fases/F-B1.md.
+Continuamos el rework. Leé docs/REWORK-ESTADO.md y después docs/fases/F-B2.md.
 Corré el bloque "¿Ya está hecho?" antes de tocar nada y decime el estado real.
 La fase ya está planificada al detalle: ejecutala tal como está escrita y cerrala
 con el ritual. Si algo del documento no coincide con la máquina, gana la máquina:
@@ -74,13 +74,13 @@ real.
 | — | **F-A** | [Higiene de la entrada](fases/F-A.md) | ☑ **Hecha el 2026-08-09** — clasificador `separatio/hygiene.py` (propias se descartan, escáneres se etiquetan por CIDR + PTR), consolidador extraído del heredoc a `separatio/honeypot_collector.py` y testeable, rutas de datos ancladas a `REPO_ROOT`. 73 tests. **Pendiente: desplegar al CT 113** |
 | — | **F-H** | [Observabilidad de la corrida](fases/F-H.md) | ☑ **Hecha el 2026-08-09** — `separatio/runlog.py` (manifiesto de la corrida), diez puntos de recorte instrumentados con `shown`/`total`, tokens a INFO, log con rotación, `status`/exit code y `separatio --last-run`. 94 tests. Verificada con corrida real: 5 llamadas, 52.897 in / 21.076 out. **Pendiente: desplegar al CT 113** |
 | — | **F-I** | [Afinado de prompts](fases/F-I.md) | ☑ **Hecha el 2026-08-09** — `runlog.coverage_block()` (el informe declara sus faltantes: 5 líneas "Limitaciones de esta corrida" contra 0 antes), topes a `config.PROMPT_CAPS` (IOCs 8→20, veredictos 25→60), **enrichment a las cuatro fases** (LATAM y general ya citan Ransomware.live/IPsum/ipcheck), campos `attack_techniques`/`exploitation_status`/`confidence` + técnicas ATT&CK corroboradas, salida estructurada en Stage 2 (0 reintentos) y `PHASE_EFFORT` cableado. 115 tests. A/B: **+$0,09 por corrida**. **Pendiente: desplegar al CT 113** |
-| **1** | **F-B1** | [Store: esquema y capa de acceso](fases/F-B1.md) | ☐ **← ACÁ ESTAMOS** — El DDL, las migraciones y `models.py`. No toca nada que esté corriendo |
-| **2** | **F-B2** | [Ingesta idempotente y backfill](fases/F-B2.md) | ☐ El colector empieza a escribir; backfill de lo que ya hay en disco |
-| **3** | **F-E** | [Listas locales](fases/F-E.md) | ☐ **Adelantada**: el filtro gratis tiene que estar antes de gastar cuota |
-| **4** | **F-C** | [Enricher inverso y triage](fases/F-C.md) | ☐ La pieza central — responde la pregunta de estudio |
-| **5** | **F-D** | [Reincidencia](fases/F-D.md) | ☐ Convierte el dato en conocimiento. Cierre real bloqueado por tráfico SSH |
-| — | **F-F** | [YARA sobre el corpus](fases/F-F.md) | ☐ **Bloqueada por corpus real** (hoy 0 payloads en disco) |
-| — | **F-G** | [Deuda técnica](fases/F-G.md) | ☐ Track paralelo, un ítem por vez — cuando moleste |
+| — | **F-B1** | [Store: esquema y capa de acceso](fases/F-B1.md) | ☑ **Hecha el 2026-08-09** — paquete `separatio/store/` (`schema.sql` con 5 tablas + 5 índices, `db.py` con `open_store`/`migrate`/`store`, `models.py` con las 9 funciones de acceso), `data/archivo.db` creado en WAL con `schema_version=1`, migración idempotente y toggle `STORE_ENABLED`. 134 tests. El pipeline **no cambió de conducta**: nadie escribe el store todavía. **Pendiente: desplegar al CT 113** |
+| — | **F-B2** | [Ingesta idempotente y backfill](fases/F-B2.md) | ☑ **Hecha el 2026-08-09** — `separatio/store/ingest.py` (`ingest_run()`, punto único de escritura), `honeypot_collector.consolidate()` cablea la escritura envuelta en try/except, `separatio/store/backfill.py` (recorre `by-date/*/`, reclasifica snapshots anteriores a F-A). 146 tests. Verificado con IP sintética: reingerir la misma ventana deja `times_seen=1` y `count(*) observation` sin cambios. El único snapshot real (`2026-08-08/`) es la IP propia del laptop — el backfill la excluyó correctamente (0 IOCs). **Pendiente: desplegar al CT 113** |
+| — | **F-E** | [Listas locales](fases/F-E.md) | ☑ **Hecha el 2026-08-09** — `separatio/lists.py` (`LocalLists`: `array('I')` + bisect para IPs sueltas, rangos `(inicio,fin)` + bisect para CIDR), cache en `data/feeds/` con TTL de 12h y fail-open a copia vencida, `IPSUM_URL` corregido a la base (`levels/3.txt` no trae score, el plan lo asumía mal). 157 tests. Verificado con techo duro en el CT: **79,8 MB de pico** (techo 120 MB) tras corregir dos fugas de RAM que el plan no había previsto. **Pendiente: cablear en F-C y desplegar al CT 113** |
+| — | **F-C** | [Enricher inverso y triage](fases/F-C.md) | ☑ **Hecha el 2026-08-09** — `separatio/enrichers/honeypot_recon.py` (`HoneypotReconEnricher`): triage en 4 etapas (higiene → cache → listas locales de F-E → residuo), presupuesto declarativo (`config.QUOTAS`) contado contra el store, sólo el resultado NEGATIVO de GreyNoise escala a la cascada de `ipcheck`. 171 tests (14 nuevos). Verificado con datos reales del store (3 IOCs, 2 candidatas sin antecedentes) con GreyNoise mockeado a propósito (no gastar cuota real sin pedirlo) y `separatio --dry-run` intacto. **Pendiente: prender el toggle con GreyNoise real (gasta cuota, decisión del usuario) y desplegar al CT 113** |
+| — | **F-D** | [Reincidencia](fases/F-D.md) | ☑ **Código y tests hechos el 2026-08-09** — `separatio/store/queries.py` (`ip_recurrence`/`payload_history`/`hassh_fanout`/`top_recurrent`), `HoneypotReconEnricher` suma la reincidencia al `detail` de la señal fuerte y a tres notas nuevas, `config.RECURRENCE_WINDOW_DAYS`/`HASSH_MIN_IPS`/`HASSH_WINDOW_DAYS`. 180 tests (9 nuevos). **Cierre real bloqueado por tráfico SSH**: 0 IPs con `days_seen >= 2` y 0 HASSH en el store de producción — la verificación en vivo queda pendiente explícito, no se declaró hecha con datos sintéticos. **Pendiente: desplegar al CT 113** |
+| — | **F-F** | [YARA sobre el corpus](fases/F-F.md) | ☐ Bloqueada por corpus real (hoy 0 payloads en disco) |
+| **3** | **F-G** | [Deuda técnica](fases/F-G.md) | ☐ **← ACÁ ESTAMOS por descarte** — F-D y F-F quedaron sin cierre real posible hasta que el honeypot vea tráfico (SSH repetido / payloads); F-G es el único track sin esa dependencia. Track paralelo, un ítem por sesión — cuando moleste. **G-1, G-3, G-4, G-5 y G-7 cerrados (todos 2026-08-09)**; quedan G-2, G-6. G-3: `pipeline.py` 985 → 839 líneas, tres módulos hoja nuevos (`deduplicator.py`, `ioc_processor.py`, `router.py`), 228 tests (45 nuevos — `pipeline.py` no tenía ninguno). G-5: paquete `separatio/providers/` (ABC `LLMProvider` + 4 subclases + fábrica) reemplaza el `if provider ==` de `_llm_chat` y el streaming de Ollama duplicado en `generate_report`/`generate_phase_report`; `analyzer.py` 1241 → 1154 líneas, 264 tests (36 nuevos), verificado además con una llamada real contra Claude. Informe del dry-run idéntico byte a byte |
 
 ### Dependencias y orden
 
@@ -89,7 +89,7 @@ F-A ──→ F-H ──→ F-I        (el informe que ya corre: verlo, y despu�
 ☑ hecha ☑ hecha ☑ hecha
                   │
                   └──→ F-B1 ──→ F-B2 ──┬─→ F-E ──→ F-C ──→ F-D
-                       store   ingesta │   listas   triage  reincidencia
+                       ☑ store ☑ ingesta │  ☑ listas ☑ triage  reincidencia
                                        │
                                        └─→ F-F (YARA)   [+ requiere corpus real]
 
@@ -111,9 +111,56 @@ El orden no es decorativo:
   calla. La fase dejó además el enrichment llegando a las cuatro fases: LATAM y general nunca habían
   visto un veredicto de IOC.
 - Sin **store**, no hay memoria; sin memoria, el triage no puede priorizar por reincidencia.
+  **F-B1 (hecha el 2026-08-09) dejó la capa lista sin cablearla**: el fichero existe, migra y está
+  testeado, pero nadie lo escribe todavía — el pipeline en producción no cambió de conducta. El
+  hallazgo de la sesión fue de formato, no de esquema: las ventanas del store comparan **cadenas**
+  de tiempo, y el colector emite `…Z` mientras Python emite `…+00:00`; en ASCII `'+' < 'Z'`, así que
+  un formato mezclado habría roto `quota_used` y la poda **en silencio**. Todo timestamp que entra
+  se normaliza.
 - **F-E va antes que F-C**: el filtro gratis —jamesbrine 1,06 M IPs + IPsum + FireHOL— tiene que
   estar completo *antes* de que el enricher inverso empiece a gastar las **25 consultas semanales**
   de GreyNoise. Cada consulta desperdiciada es el 4 % del presupuesto.
+- **F-B2 (hecha el 2026-08-09) cablea la escritura**: `honeypot_collector.consolidate()` ya vuelca
+  cada pull a `data/archivo.db` vía `ingest_run()`, y `store/backfill.py` reconstruye desde
+  `by-date/*/` lo que hubiera antes. El hallazgo de la sesión fue otra trampa de FK que F-B1 no había
+  anotado: `observation.payload_sha256` también es clave foránea, así que un evento con `sha256`
+  necesita su fila en `payload` **antes** de insertar la observación — el mismo patrón que ya existía
+  para `ioc`. Se resolvió la trampa de `times_seen` que F-B1 dejó pendiente con la opción (b):
+  `upsert_ioc` ganó un `count: bool = True` para poder asegurar la fila sin contarla.
+- **F-E (hecha el 2026-08-09) deja el filtro gratis, listo pero sin cablear**: `separatio/lists.py`
+  responde pertenencia en cuatro blocklists agregadas sin gastar cuota, pero todavía no lo llama
+  nadie — F-C es quien lo va a consultar sobre las IPs del honeypot. La fase encontró dos cosas que
+  el plan había dado por sentadas y no eran así: `levels/3.txt` de IPsum **no trae score por línea**
+  (sólo el agregado `ipsum.txt` lo trae; se corrigió `config.IPSUM_URL` en el documento y en el
+  código), y la primera implementación (`text.splitlines()` sobre 1 M de líneas) rompía el techo de
+  RAM del CT por RAM transitoria, no por el tamaño final de las estructuras — 128,8 MB de pico contra
+  un techo de 120 MB. Se arregló iterando el archivo línea a línea en vez de materializar la lista
+  completa, y sacando el `set()` intermedio de la deduplicación: quedó en 79,8 MB de pico real,
+  medido en el CT con `systemd-run -p MemoryMax=120M`.
+- **F-C (hecha el 2026-08-09) es la pieza central**: `HoneypotReconEnricher` responde "esta IP me
+  pegó, ¿es actor conocido o ruido de internet?" gastando cuota sólo en el residuo que ni el cache
+  ni las listas locales de F-E resuelven gratis. Sólo el resultado **negativo** de GreyNoise
+  (`noise=False`, no la ve escanear internet) escala a la cascada completa de `ipcheck` — es la
+  única señal disponible que se parece a "dirigido a mí", porque ninguna blocklist contiene
+  negativos. El presupuesto se cuenta contra `enrichment` (F-B1), no en una variable de proceso. El
+  hallazgo de la sesión fue de alcance, no de diseño: el plan no decía qué hacer con las IPs
+  `noise=False` que exceden `RECON_MAX_ESCALATE` — se resolvió emitiéndoles igual el veredicto (sin
+  el detalle de la cascada) en vez de perderlas en silencio, y `models.recent_ips` (F-B1) ganó dos
+  columnas (`sensors`, `has_payload`) que el criterio de prioridad del residuo necesitaba y la
+  función original no traía. Verificada con las 2 IPs candidatas reales del store (`45.9.148.99`,
+  `45.9.148.52`) con GreyNoise **mockeado a propósito**: gastar la cuota real semanal es una
+  decisión del usuario, no algo que una sesión de verificación tome sola.
+- **F-D (código y tests hechos el 2026-08-09) convierte dato en conocimiento — literalmente el
+  criterio de cierre del rework**: `HoneypotReconEnricher` ya no dice sólo "no la ve escanear
+  internet", dice "volvió N de los últimos 14 días; no la ve escanear internet". Fue casi gratis
+  porque F-B2 ya mantenía `days_seen`/`times_seen` y el HASSH ya entraba como IOC propio — la fase
+  fue sobre todo consultas (`store/queries.py`) y redacción (tres notas nuevas). El único ajuste al
+  diseño original de F-C fue de precisión: la prioridad del residuo pasó del `days_seen` denormalizado
+  (la vida entera del indicador) a `ip_recurrence()` (acotado a `RECURRENCE_WINDOW_DAYS`), que es lo
+  que el enunciado "de los últimos 14 días" necesita para no mentir. **No se pudo cerrar contra dato
+  real**: el store de producción tiene 0 IPs con `days_seen >= 2` y 0 HASSH — el honeypot todavía no
+  vio tráfico SSH repetido. Se documentó como pendiente explícito en vez de forzar el cierre con
+  datos sintéticos, según la regla del rework.
 
 ### Invariantes del rework
 
@@ -158,3 +205,10 @@ Lo que está hecho en el repo pero **todavía no corre en el CT 113**:
 | F-A | `git pull` en `/opt/intel/app` + agregar `OWN_IPS=` a `/etc/intel/intel.env`. Sin eso el pull de cada 6 h sigue metiendo la IP de casa como atacante. Comandos exactos en [`fases/F-A.md`](fases/F-A.md) §Pendientes |
 | F-H | El mismo `git pull` lo lleva. A partir de ahí `journalctl -u separatio.service` muestra el resumen de cada corrida y `separatio --last-run` funciona en el CT. Opcional: `OnFailure=` en la unit, ahora que el exit code significa algo |
 | F-I | El mismo `git pull`, sin variables nuevas. Ojo con dos cosas al desplegar: el informe del CT va a **crecer ~9 %** y costar **~$0,09 más por corrida**, y la primera corrida con el esquema de Stage 2 paga una compilación (se cachea 24 h, así que se paga una vez por día) |
+| F-B1 | El mismo `git pull`, **sin variables nuevas** — pero esta vez conviene rehacer `venv/bin/pip install -e '.[dev]'` para que el subpaquete `separatio.store` quede registrado. Nada cambia de conducta: el store se crea solo (`data/archivo.db`, ~64 KB) y nadie lo escribe hasta F-B2. Verificar de paso que el usuario `intel` pueda escribir en `/opt/intel/app/data/` |
+| F-B2 | El mismo `git pull`, sin variables nuevas. A partir de acá **el colector empieza a escribir de verdad** en cada pull (cada 6 h) — conviene correr `python3 -m separatio.store.backfill` una vez después del pull, para meter al store lo que ya haya en `by-date/` del colector viejo |
+| F-E | El mismo `git pull`, sin variables nuevas. `data/feeds/` se crea sola en el primer `load()` (~15-16 MB). Nadie llama a `LocalLists` todavía — no cambia la conducta del pipeline hasta que F-C lo cablee |
+| F-C | El mismo `git pull`, sin variables nuevas (`QUOTAS`/`RECON_*`/`ENRICH_TTL_DAYS` tienen default en `config.py`). El toggle `honeypot_recon` sigue en `False`: no cambia conducta hasta que se prenda a propósito (gasta cuota real de GreyNoise) |
+| F-D | El mismo `git pull`, sin variables nuevas (`RECURRENCE_WINDOW_DAYS`/`HASSH_MIN_IPS`/`HASSH_WINDOW_DAYS` tienen default en `config.py`). No cambia conducta hasta que `honeypot_recon` esté en `True` **y** el honeypot tenga tráfico SSH repetido — hoy ninguna de las dos |
+| F-G (G-1/G-3/G-4/G-7) | El mismo `git pull`, sin variables nuevas y **sin reinstalar** (los módulos nuevos de G-3 —`deduplicator.py`, `ioc_processor.py`, `router.py`— viven dentro del paquete `separatio`, que ya está registrado). Por diseño **ningún** ítem de F-G cambia la salida del pipeline; lo único visible en el CT es lo de G-4 (la columna `reputation` en `iocs.csv`) y lo de G-7 (dos líneas de ruido menos en el log) |
+| F-G (G-5) | El mismo `git pull`, sin variables nuevas — pero esta vez **sí hay que reinstalar** (`venv/bin/pip install -e '.[dev]'`): `separatio.providers` es un subpaquete nuevo, mismo caso que F-B1 dejó anotado para `separatio.store`. No cambia la salida del pipeline (mismo dispatch, ahora por clases en vez de `if/elif`) |

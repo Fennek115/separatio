@@ -1,6 +1,6 @@
 # F-B2 · Ingesta idempotente y backfill
 
-> Estado: **☐ pendiente — sesión 2** · Depende de: **F-B1**
+> Estado: **☑ hecha el 2026-08-09** · Depende de: F-B1 ☑
 > Diseño: [`../PLAN-REWORK.md`](../PLAN-REWORK.md) §F-B · Índice: [`../REWORK-ESTADO.md`](../REWORK-ESTADO.md)
 >
 > **Completamente especificada. Ejecutar y documentar.**
@@ -77,6 +77,14 @@ misma ventana no duplica ni infla `times_seen` de más… salvo por lo de abajo.
 > cuando `add_observation` devolvió `True`** (fila nueva). Es decir, el contador del IOC se deriva
 > de las observaciones realmente insertadas, no de las veces que se lo tocó. El test
 > `test_reingerir_no_infla_times_seen` fija esto.
+>
+> **Anotado al cerrar F-B1 (2026-08-09):** ojo con el orden, porque `observation.ioc` es una clave
+> foránea y la fila de `ioc` **tiene que existir antes** de insertar la observación — o sea que
+> "crearla" ya cuenta 1. Dos salidas, ambas dentro de F-B2 y sin tocar el esquema: (a) consultar
+> `ioc_row()` primero y llamar a `upsert_ioc` sólo tras un `add_observation` que dio `True`, o
+> (b) agregarle a `upsert_ioc` un `count: bool = True` para poder asegurar la fila sin contar.
+> `add_observation` ya devuelve `False` —sin levantar— si la FK no está, así que probar (a) no
+> rompe nada.
 
 **`days_seen`:** se incrementa sólo si `ts[:10] != ioc.last_day`, y se actualiza `last_day`. Lo
 consume F-D.
@@ -170,9 +178,113 @@ venv/bin/pytest tests/ -q
 
 ## As-built
 
-*(vacío hasta el cierre — pegar la salida literal, incluidos los dos `count(*)` iguales)*
+Ejecutada el **2026-08-09**. Estado al arrancar, con el bloque "¿Ya está hecho?": store en 0 filas,
+colector sin mención de `store`, sin `backfill.py`.
+
+### Lo que quedó en disco
+
+| Fichero | Qué es |
+|---|---|
+| `separatio/store/ingest.py` | `ingest_run()` — el punto único de escritura, comparten colector y backfill |
+| `separatio/store/backfill.py` | `backfill()` + `main()` (`python3 -m separatio.store.backfill [--since] [--dry-run]`) |
+| `separatio/honeypot_collector.py` | `consolidate()` llama a `ingest_run` al final, envuelta en try/except; `main()` imprime la línea `store:` |
+| `separatio/store/models.py` | `upsert_ioc` ganó `count: bool = True` (ver "lo que se apartó del plan") |
+| `tests/test_store_ingest.py` | **12** tests (los 11 del plan + `test_payload_entra_desde_events`) |
+
+### 1. Tests
+
+```
+$ venv/bin/pytest tests/ -q | tail -1
+146 passed in 5.42s
+```
+
+134 previos + 12 nuevos = 146. Ninguno de los previos cambió.
+
+### 2. Ingerir dos veces la misma ventana no duplica (sobre el store real, con una IP sintética)
+
+```
+$ PYTHONPATH=. python3 -m separatio.honeypot_collector raw/ out/ 24
+[pull]   store: 1 IOCs nuevos, 1 observaciones nuevas, 0 payload(s) nuevo(s)
+$ sqlite3 data/archivo.db "select value,kind,klass,times_seen,days_seen from ioc;"
+45.9.148.99|ip|unknown|1|1
+$ PYTHONPATH=. python3 -m separatio.honeypot_collector raw/ out/ 24   # misma ventana, de nuevo
+[pull]   store: 0 IOCs nuevos, 0 observaciones nuevas, 0 payload(s) nuevo(s)
+$ sqlite3 data/archivo.db "select count(*) from observation;"
+1
+```
+
+`times_seen` se quedó en 1 tras la segunda pasada — la trampa que anotó F-B1 no se coló.
+
+### 3. El backfill sobre `data/honeypot/by-date/` real
+
+El único snapshot en disco (`2026-08-08/`) es anterior a F-A: un solo atacante, **sin** `class`, y
+es literalmente la IP propia del laptop (`OWN_IPS` del `.env`).
+
+```
+$ python3 -m separatio.store.backfill --dry-run
+[dry-run] backfill: 1 carpeta(s), 0 IOC(s) nuevo(s), 0 observación(es) nueva(s), 0 payload(s) nuevo(s)
+$ PYTHONPATH=. python3 -m separatio.store.backfill
+backfill: 1 carpeta(s), 0 IOC(s) nuevo(s), 0 observación(es) nueva(s), 0 payload(s) nuevo(s)
+$ PYTHONPATH=. python3 -m separatio.store.backfill   # segunda pasada
+backfill: 1 carpeta(s), 0 IOC(s) nuevo(s), 0 observación(es) nueva(s), 0 payload(s) nuevo(s)
+```
+
+0 en las tres corridas: la clasificación retroactiva excluyó la IP propia, tal como se esperaba —
+`test_backfill_clasifica_snapshots_viejos` fija este caso con datos sintéticos. El store real quedó
+tal como lo dejó F-B1:
+
+```
+$ sqlite3 data/archivo.db "select 'ioc', count(*) from ioc union all
+                           select 'observation', count(*) from observation union all
+                           select 'payload', count(*) from payload;"
+ioc|0
+observation|0
+payload|0
+```
+
+### 4. El pipeline no se enteró
+
+```
+$ venv/bin/separatio --dry-run --limit 5
+...
+  RESUMEN DE LA CORRIDA — 2026-08-09  [ok]
+  Modo:         dry-run
+  Duración:     8s
+  Artículos:    25 en el pool → 5 tomados → 5 resumidos, 0 fallidos
+```
+
+### Lo que se apartó del plan (y por qué)
+
+| Cambio | Motivo |
+|---|---|
+| Se eligió la opción **(b)** que dejó anotada F-B1: `upsert_ioc(..., count: bool = True)` | Asegura la fila del IOC (necesaria como FK antes de `add_observation`) sin sumarla a `times_seen`/`days_seen`; el contador real se pisa recién cuando `add_observation` devuelve `True`, con el `ts` de la observación. Se prefirió sobre la opción (a) porque no depende de distinguir "primera vez que se ve este IOC en la corrida" con una consulta aparte — la propia condición SQL (`CASE WHEN ?=0`) lo resuelve en una sola sentencia |
+| **`payload` tiene la misma trampa de FK que `ioc`** (no estaba anotada en F-B1) | `observation.payload_sha256` también es una clave foránea: al ingerir un evento con `sha256`, hay que hacer `upsert_payload` **antes** de `add_observation`, si no salta `IntegrityError` y la observación se descarta con un warning. Se detectó con `test_payload_entra_desde_events`, que no estaba en la lista de 11 del plan y se agregó |
+| El HASSH no lleva un `ts` propio en `events[]` (sólo aparece agregado en `attackers[].hassh`) | Se usa `a["last_seen"]` (o `first_seen` si falta) como marca de tiempo de la observación `hassh→"from <ip>"`. No hay una alternativa más fina con los datos que produce el colector hoy |
+| `_classify_attackers` del backfill sólo reclasifica si `class` es `None`/ausente | Un snapshot de F-A en adelante ya trae su clasificación persistida (incluida `scanner`); reclasificar lo pisaría con el estado *actual* de `OWN_IPS`/PTR, que puede no coincidir con el que valía el día del snapshot |
+| `hashes.log` se ingiere **una sola vez, al final del backfill**, no por carpeta | Es un índice global y ya viene deduplicado por sha256 desde el propio colector (`if sha not in known`); repartirlo por día habría exigido reconstruir a qué día perteneció cada línea, dato que el propio fichero no guarda con esa granularidad |
+| `backfill()` acepta `db_path` (no sólo `root`) | Los tests necesitan apuntar a `:memory:` o a un fichero en `tmp_path`, no a `data/archivo.db` |
+
+### Deuda que deja anotada
+
+- **`days_seen` sigue siendo un contador denormalizado** (heredado de F-B1): el backfill procesa las
+  carpetas de `by-date/` en orden de fecha, así que es exacto en el uso real, pero nada en el código
+  impide pasarle carpetas fuera de orden a mano. Sigue sin haber un recálculo desde `observation`
+  porque no hizo falta: no se vio sobrecontar en esta corrida.
+- **Los `payloads/*.bin` por día se leen pero no se deduplican contra `events[].sha256`** dentro del
+  mismo `ingest_run`: si un sha aparece en ambos, `upsert_payload` se llama dos veces en la misma
+  pasada (el `times_seen` del payload puede quedar por encima de "veces realmente vistas". No afecta
+  IOCs/observaciones —sólo al contador del corpus— y no está cubierto por un test; se anota para
+  quien lo note al revisar el corpus real.
 
 ## Pendientes que deja
 
-*(a completar. Previsible: desplegar al CT 113 con `git pull`; el store se crea solo en el primer
-pull. Y decidir si `data/archivo.db` entra al backup del CT — hoy el 113 no está en los jobs)*
+- **Desplegar al CT 113**: el mismo `git pull` (más `pip install -e '.[dev]'` si no se hizo ya para
+  F-B1) lleva la ingesta cableada. El primer pull real del CT va a poblar el store con datos de
+  verdad; conviene correr `python3 -m separatio.store.backfill` una vez ahí para no perder lo que
+  ya haya en `by-date/` de corridas previas del colector viejo.
+- **Decidir si `data/archivo.db` entra al backup del CT** — hoy el 113 no está en los jobs de backup
+  (pendiente heredado de F-B1).
+- El `hashes.log` real (raíz de `data/honeypot/`) todavía no existe en este laptop —no hay corpus de
+  payloads— así que la rama que lo lee en `backfill.py` no se ejercitó contra datos reales, sólo
+  contra el sintético de `test_backfill_es_idempotente`. Se va a ejercitar sola en cuanto el CT junte
+  el primer binario.

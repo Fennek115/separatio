@@ -18,6 +18,20 @@ from separatio.enrichment import Enricher, EnrichmentContext, IocVerdict, ioc_ki
 logger = logging.getLogger(__name__)
 
 
+def _safe_netloc(url: str) -> str:
+    """`urlparse(url).netloc`, tolerante a URLs malformadas.
+
+    Una línea del feed (o un IOC extraído por el LLM) con un '[' o ']' suelto
+    en el netloc — visto en la práctica, no necesariamente IPv6 real — hace que
+    `urlparse` levante `ValueError: Invalid IPv6 URL`. Sin este guard, una sola
+    línea mala tira todo `_load()` y el enricher entero se marca `failed` para
+    la corrida (F-G G-7)."""
+    try:
+        return urlparse(url).netloc.lower()
+    except ValueError:
+        return ""
+
+
 class OpenPhishEnricher(Enricher):
     name = "OpenPhish"
 
@@ -36,7 +50,7 @@ class OpenPhishEnricher(Enricher):
             if not line:
                 continue
             urls.add(line.lower())
-            host = urlparse(line).netloc.lower()
+            host = _safe_netloc(line)
             if host:
                 hosts.add(host.removeprefix("www."))
         return urls, hosts
@@ -54,7 +68,7 @@ class OpenPhishEnricher(Enricher):
                 hit = True
             elif kind == "domain" and ioc.removeprefix("www.") in hosts:
                 hit = True
-            elif kind == "url" and urlparse(ioc).netloc.lower().removeprefix("www.") in hosts:
+            elif kind == "url" and _safe_netloc(ioc).removeprefix("www.") in hosts:
                 hit = True
             if hit:
                 ctx.add(IocVerdict(

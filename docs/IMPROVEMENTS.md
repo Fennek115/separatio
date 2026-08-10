@@ -34,7 +34,7 @@ Esta iteración entregó:
 | # | Hallazgo | Ubicación | Estado |
 |---|----------|-----------|--------|
 | 1 | `pipeline.py` concentra lógica de negocio (dedup, detección de tipo de IOC, export, ruteo) además de orquestar | `pipeline.py` | Roadmap (§6.3) |
-| 2 | Acoplamiento de proveedores LLM: `if provider == …` en `_llm_chat` + streaming Ollama duplicado en `generate_report` y `generate_phase_report` | `analyzer.py:285,480,880` | Roadmap (§6.1) |
+| 2 | Acoplamiento de proveedores LLM: `if provider == …` en `_llm_chat` + streaming Ollama duplicado en `generate_report` y `generate_phase_report` | `analyzer.py:285,480,880` | **Hecho** (§6.1) |
 | 3 | Rutas relativas (`./reports`) → bajo cron desde otro cwd, dispersaban reports y reseteaban `history.json` | `config.py` | **Hecho** (§4.1) |
 | 4 | Errores tragados: Stage 2 seguía a generación de informe aunque fallaran todos los resúmenes | `pipeline.py:stage2_summarize` | **Hecho** (§4.4) |
 | 5 | Sin reintentos de red en Miniflux / KEV / EPSS | `miniflux_client.py`, `correlator.py` | **Hecho** (§4.3) |
@@ -161,17 +161,27 @@ Documentados aquí en vez de ejecutados de golpe: son cambios extensos sobre un
 sistema en producción (cron 03:00) cuya verificación requiere Ollama/keys cloud
 + Miniflux en vivo. Conviene hacerlos uno por uno con tests antes/después.
 
-### 6.1 Abstracción de proveedores LLM  *(prioridad alta — el setup actual es cloud)*
+### 6.1 Abstracción de proveedores LLM  ✅ *hecho 2026-08-09 (F-G/G-5)*
 - **Problema:** `_llm_chat` (`analyzer.py:285-369`) hace dispatch por `if provider ==`,
   y la rama de streaming de Ollama está **duplicada** en `generate_report`
   (`:480`) y `generate_phase_report` (`:880`).
-- **Propuesta:** paquete `providers/` con `LLMProvider` (ABC) y métodos
-  `chat()` / `chat_stream()`; subclases `OllamaProvider`, `AnthropicProvider`,
-  `OpenAIProvider`, `GeminiProvider`; un `get_provider(config)` (factory). Mover
-  el streaming de Ollama dentro de `OllamaProvider.chat_stream`. `analyzer.py`
-  pasa a llamar `provider.chat(...)` sin condicionales.
-- **Verificación:** test con un `FakeProvider` que devuelve texto fijo; smoke por
-  proveedor con 1 artículo.
+- **Hecho**: paquete `separatio/providers/` con `LLMProvider` (ABC), `chat()` +
+  `chat_stream()` (la base cae a `chat()`; sólo `OllamaProvider` la
+  sobreescribe — es el único proveedor que streamea de verdad), subclases
+  `OllamaProvider`/`AnthropicProvider`/`OpenAIProvider`/`GeminiProvider` y
+  `get_provider(name, ollama_host="")` (factory). `analyzer._llm_chat` quedó en
+  6 líneas de cuerpo; `generate_report`/`generate_phase_report` comparten
+  `_llm_chat_stream` para la rama Ollama en vez de reimplementar el loop.
+  `analyzer.py` 1241 → 1154 líneas. Un quirk preexistente (`generate_report`
+  nunca logueaba el consumo de Ollama en el manifiesto, a diferencia de
+  `generate_phase_report`) se preservó tal cual — arreglarlo habría cambiado
+  la salida. As-built en [`fases/F-G.md`](fases/F-G.md).
+- **Verificación**: 36 tests nuevos (18 `test_providers.py` con cada SDK
+  reemplazado por un doble — `openai`/`google-generativeai` ni siquiera están
+  instalados — + 18 `test_analyzer_llm.py` con un `FakeProvider`) y una
+  llamada real contra Claude (única API viva hoy; Ollama es legacy sin
+  servidor) ejercitando `_llm_chat`/`generate_phase_report`/
+  `generate_synthesis_report` de punta a punta.
 
 ### 6.2 Reporter: plantillas + Markdown real  *(prioridad media)*
 - **Problema:** `reporter.py:93-524` tiene CSS/HTML como strings de Python y
@@ -181,20 +191,26 @@ sistema en producción (cron 03:00) cuya verificación requiere Ollama/keys clou
   parser por la librería `markdown` (o `mistune`). Mantener el CSS de paginado A4.
 - **Verificación:** render de un informe de ejemplo fijo → comparar estructura HTML.
 
-### 6.3 Modularizar `pipeline.py`  *(prioridad media)*
+### 6.3 Modularizar `pipeline.py`  ✅ *hecho 2026-08-09 (F-G/G-3)*
 - Extraer de `pipeline.py`: `dedup_by_cves`→`deduplicator.py`; `_detect_ioc_type`
   + `export_iocs`→`ioc_processor.py` (reusar `enrichment.ioc_kind`); ruteo por
   fases→`router.py`. `pipeline.py` queda solo como orquestador.
+- **Hecho así**, con una salvedad: reusar `enrichment.ioc_kind` habría cambiado la
+  columna `type` de `iocs.csv` (colapsa md5/sha1/sha256 en `hash`), así que las dos
+  funciones quedaron separadas y documentadas. 985 → 839 líneas. As-built en
+  [`fases/F-G.md`](fases/F-G.md).
 
 ### 6.4 Configuración inyectable  *(prioridad baja)*
 - Migrar `config.py` a `pydantic.BaseSettings` (o un dataclass `Settings`) e
   inyectarlo en las firmas (`stage1_fetch(client, settings)`) en vez de importar
   el módulo global. Habilita tests parametrizados y múltiples configs.
 
-### 6.5 Enriquecer el export de IOCs *(quick win)*
+### 6.5 Enriquecer el export de IOCs  ✅ *hecho 2026-08-09 (F-G/G-4)*
 - Hoy `export_iocs` corre antes de Stage 2.7. Reordenar (o re-exportar) para
   incluir `EnrichmentContext.export_rows()` en el CSV/JSON de IOCs, de modo que
   el veredicto de reputación quede junto a cada IOC.
+- **Hecho**: las llamadas se movieron a después de `stage27_enrich` y cada fila
+  lleva una columna `reputation`. As-built en [`fases/F-G.md`](fases/F-G.md).
 
 ---
 

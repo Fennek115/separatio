@@ -1,6 +1,6 @@
 # F-B1 · El store: esquema y capa de acceso
 
-> Estado: **☐ pendiente — sesión 1 del rework tras F-A** · Depende de: F-A ☑
+> Estado: **☑ hecha el 2026-08-09** · Depende de: F-A ☑
 > Diseño: [`../PLAN-REWORK.md`](../PLAN-REWORK.md) §3 y §4 · Índice: [`../REWORK-ESTADO.md`](../REWORK-ESTADO.md)
 >
 > **Esta fase está completamente especificada. No hay que diseñar nada: ejecutar y documentar.**
@@ -25,8 +25,12 @@ ls -la data/archivo.db 2>/dev/null || echo "→ no existe el fichero de base"
 q ".tables"
 q "select value from meta where key='schema_version'"
 q "pragma journal_mode"                        # esperado: wal
-venv/bin/pytest tests/ -q | tail -1            # baseline al cerrar F-A: 73 passed
+venv/bin/pytest tests/ -q | tail -1            # baseline al abrir F-B1: 115 passed
 ```
+
+> **Corregido el 2026-08-09 al ejecutar:** el bloque decía "baseline al cerrar F-A: 73 passed",
+> pero F-H (+21) y F-I (+21) corrieron después de escribirse esta ficha. El baseline real al
+> abrir F-B1 era **115**.
 
 ## Contexto mínimo
 
@@ -224,7 +228,7 @@ Nombres exactos a escribir:
 
 Las cuatro cosas, verificadas con comando:
 
-1. `venv/bin/pytest tests/ -q` → **73 previos + los nuevos**, todos verdes.
+1. `venv/bin/pytest tests/ -q` → **115 previos + los nuevos**, todos verdes.
 2. `sqlite3 data/archivo.db ".tables"` muestra las 5 tablas y
    `pragma journal_mode` devuelve `wal`.
 3. Correr la migración dos veces deja `schema_version` en 1 y el esquema idéntico.
@@ -233,9 +237,137 @@ Las cuatro cosas, verificadas con comando:
 
 ## As-built
 
-*(vacío hasta el cierre — salida literal de los cuatro comandos de arriba)*
+Ejecutada el **2026-08-09**. Estado al arrancar, con el bloque "¿Ya está hecho?": no existía el
+paquete `store/`, no existía `data/archivo.db`, y el baseline de tests era **115** (no 73).
+
+### Lo que quedó en disco
+
+| Fichero | Qué es |
+|---|---|
+| `separatio/store/schema.sql` | El DDL, idempotente (`IF NOT EXISTS`). 5 tablas + 5 índices |
+| `separatio/store/db.py` | `open_store` / `migrate` / `schema_version` / `default_path` / `store` (context manager) |
+| `separatio/store/models.py` | Las 9 funciones de acceso + `now_iso`, `dedup_key`, `_iso` |
+| `separatio/store/__init__.py` | Reexporta la API; `from separatio.store import store, models` |
+| `tests/test_store.py` | **19** tests (los 14 del plan + 5 extra, ver abajo) |
+| `separatio/config.py` | `STORE_ENABLED` / `STORE_PATH` / `STORE_RETENTION_DAYS` |
+| `pyproject.toml` | `separatio.store` en `packages` + `package-data` para `schema.sql` |
+
+### 1. Tests
+
+```
+$ venv/bin/pytest tests/ -q | tail -3
+........................................................................ [ 53%]
+..............................................................           [100%]
+134 passed in 4.48s
+```
+
+115 previos + 19 nuevos = 134. Ninguno de los previos cambió.
+
+### 2. El fichero, las tablas y el WAL
+
+```
+$ venv/bin/python -c "from separatio.store import open_store, migrate, schema_version; ..."
+abierto: True | version: 1
+migrate x2: 1 1
+
+$ sqlite3 data/archivo.db ".tables"
+enrichment     ioc     meta     observation     payload
+
+$ sqlite3 data/archivo.db "pragma journal_mode"
+wal
+
+$ sqlite3 data/archivo.db "select value from meta where key='schema_version'"
+1
+
+$ ls -la data/
+-rw-r--r-- 1 dust dust 65536 Aug  9 06:05 archivo.db
+```
+
+### 3. La migración es idempotente
+
+`migrate()` corrida dos veces devuelve `1 1`, deja una sola fila en `meta` y el esquema idéntico
+(`test_migrate_es_idempotente` compara el `sqlite_master` completo antes y después). Huella del
+esquema resultante:
+
+```
+$ sqlite3 data/archivo.db ".schema" | sha256sum
+dc92108af27ea64a299431dbd78f4b1279e9a1d00c1fc0d967d388540ba19b68  -
+```
+
+### 4. El pipeline no cambió de conducta
+
+```
+$ venv/bin/separatio --dry-run --limit 5
+...
+  RESUMEN DE LA CORRIDA — 2026-08-09  [ok]
+  Modo:         dry-run
+  Duración:     6s
+  Artículos:    25 en el pool → 5 tomados → 5 resumidos, 0 fallidos
+  Datos NO enviados al LLM:
+    · 15 artículos descartados por el tope por feed (10/25)
+    · 5 artículos descartados por MAX_ARTICLES (5/10)
+```
+
+Y el store quedó **intacto**, que es lo que esta fase promete: nadie lo escribe todavía.
+
+```
+$ sqlite3 data/archivo.db "select 'ioc', count(*) from ioc union all ..."
+ioc|0
+observation|0
+enrichment|0
+payload|0
+```
+
+### 5. Importable con el `python3` del sistema (el del colector)
+
+El colector del CT corre sin venv (`PYTHONPATH=$REPO_ROOT python3 -m separatio.honeypot_collector`),
+así que el store tiene que importarse igual. `sqlite3` es stdlib, y `db.py` importa `config` de
+forma perezosa y con fallback:
+
+```
+$ PYTHONPATH=/home/dust/Projects/Intel python3 -c "from separatio.store import db, models; ..."
+stdlib-only OK: 3.14.6 2026-08-09T07:00:00+00:00
+```
+
+### Lo que se apartó del plan (y por qué)
+
+Todo lo de abajo salió de ejecutar, no de rediseñar. Vale la regla: gana la máquina.
+
+| Cambio | Motivo |
+|---|---|
+| `payload` va **antes** que `observation` en el DDL | `observation.payload_sha256` la referencia. SQLite resuelve las FK en tiempo de DML, así que el orden del plan también funcionaba, pero leer el fichero de arriba abajo con las referencias ya definidas es más claro |
+| `models._iso()` normaliza todo timestamp que entra | No estaba en el plan y es un bug evitado, no un adorno: las ventanas (`quota_used`, `prune_observations`, `recent_ips`) **comparan cadenas**, y el colector emite `…Z` mientras Python emite `…+00:00`. En ASCII `'+' < 'Z'`, así que un formato mezclado rompe las comparaciones **en silencio**. Test: `test_timestamps_se_normalizan_a_iso_utc` |
+| `add_observation` devuelve `False` ante violación de FK en vez de levantar | `INSERT OR IGNORE` **no** cubre las claves foráneas (sí las UNIQUE): un `ioc` que no existe todavía levantaría `IntegrityError` en medio del bucle del colector. Se loguea como warning y se sigue — invariante 1 del rework. Test: `test_add_observation_tolera_ioc_inexistente` |
+| `upsert_ioc` usa `MIN`/`MAX` para `first_seen`/`last_seen`/`last_day` y `COALESCE` para `klass`/`scanner_name` | Que el backfill desordenado de F-B2 no haga retroceder las fechas, y que una corrida sin PTR (`klass=None`) no borre la clasificación que dejó otra que sí lo tenía |
+| `open_store` acepta `":memory:"` y respeta `STORE_ENABLED` sólo cuando `path is None` | Los tests usan el mismo camino de código que producción (con los PRAGMAs puestos) sin que el toggle los apague |
+| En `read_only` no se aplican `journal_mode=WAL` ni `synchronous` | Sobre una conexión `mode=ro` escriben el header y fallan. Se aplican sólo `foreign_keys` y `busy_timeout` |
+| Extra sobre las 9 firmas del plan: `now_iso()`, `dedup_key()`, `schema_version()`, `default_path()`, `QUOTA_WINDOWS` | `dedup_key` se saca a función propia para poder testearla; el resto es lo que necesitaban `db.py` y los tests |
+| 19 tests en vez de 14 | Los 14 del plan, con los nombres exactos, más: `test_ioc_row_devuelve_none_si_no_existe`, `test_store_context_manager_commitea`, `test_add_observation_tolera_ioc_inexistente`, `test_upsert_payload_acumula_y_conserva_la_familia` (el plan dejaba `upsert_payload` sin test) y `test_timestamps_se_normalizan_a_iso_utc` |
+| `pyproject.toml` toca dos cosas | `separatio.store` en `packages` (si no, una instalación no-editable no lo lleva) y `package-data` para `schema.sql` (`migrate()` lo lee de disco) |
+
+### Deuda que deja anotada
+
+- **`days_seen` es un contador denormalizado.** Es exacto si los avistamientos llegan en orden
+  cronológico —que es como los produce el colector— y puede sobrecontar si un backfill los mete
+  alternando días. Documentado en el docstring de `upsert_ioc`. Si F-B2 lo ve pasar en el backfill,
+  el arreglo es un recálculo desde `observation` (`COUNT(DISTINCT substr(ts,1,10))`), no tocar el
+  esquema.
+- ⚠️ **Para F-B2: la FK y la "trampa de `times_seen`" se pisan.** F-B2 especifica incrementar
+  `times_seen` **sólo cuando `add_observation` devolvió `True`**, pero `observation.ioc` es una
+  clave foránea, así que la fila de `ioc` **tiene que existir antes** de insertar la observación —
+  y con la API de F-B1 crearla ya cuenta 1. Las dos salidas, ninguna de las cuales redefine el
+  esquema: (a) `ingest.py` consulta `ioc_row()` primero y sólo llama a `upsert_ioc` tras un
+  `add_observation` que dio `True` (creando la fila en la primera observación nueva), o (b) se le
+  agrega a `upsert_ioc` un `count: bool = True` para poder "asegurar la fila sin contar". No se
+  eligió acá a propósito: es diseño de F-B2 y esta fase no rediseña. El test
+  `test_reingerir_no_infla_times_seen` de F-B2 es el que lo va a fijar.
+- **Nadie llama al store todavía.** Es a propósito: F-B2 cablea la escritura del colector y F-C la
+  lectura del pipeline. Hasta entonces `data/archivo.db` es un fichero vacío de 64 KB.
 
 ## Pendientes que deja
 
-*(a completar: típicamente el despliegue al CT 113, que en esta fase es sólo `git pull` — no hace
-falta variable nueva porque `STORE_PATH` sale de `REPO_ROOT`)*
+| Qué | Detalle |
+|---|---|
+| **Desplegar al CT 113** | Sólo `git pull` en `/opt/intel/app` — **sin variable nueva** (`STORE_PATH` sale de `REPO_ROOT`, y `STORE_ENABLED` tiene default `True`). Conviene correr `venv/bin/pip install -e '.[dev]'` en el pull para que `separatio.store` quede registrado en la instalación editable. Se acumula con los pendientes de F-A/F-H/F-I: es el mismo `git pull` |
+| **`data/` en el CT** | El fichero se crea solo al primer `open_store()`. Verificar que el usuario `intel` pueda escribir en `/opt/intel/app/data/` cuando F-B2 lo estrene |
+| **Backup** | `data/archivo.db` pasa a ser estado no reconstruible desde git (sí desde los artefactos en disco, por el backfill de F-B2). Cuando se decida si el CT 113 entra en los jobs de backup, este fichero es el candidato №1 |

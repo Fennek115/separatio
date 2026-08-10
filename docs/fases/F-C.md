@@ -1,9 +1,8 @@
 # F-C · El enricher inverso y el triage de cuota
 
-> Estado: **☐ pendiente — sesión 4** · Depende de: **F-B1**, **F-B2**, **F-E**
+> Estado: **☑ hecha el 2026-08-09** · Depende de: **F-B1**, **F-B2**, **F-E**
 > Diseño: [`../PLAN-REWORK.md`](../PLAN-REWORK.md) §5 · Índice: [`../REWORK-ESTADO.md`](../REWORK-ESTADO.md)
 >
-> **Completamente especificada. Ejecutar y documentar.**
 > Es la pieza central del rework: la que responde la pregunta de estudio.
 
 ## Objetivo
@@ -251,9 +250,66 @@ Con datos reales del honeypot:
 
 ## As-built
 
-*(vacío hasta el cierre — pegar el log del triage y la consulta SQL de cuota, lado a lado)*
+**Implementado:** `separatio/enrichers/honeypot_recon.py` (`HoneypotReconEnricher`), registrado en
+`enrichers/__init__.py:build_enrichers` con toggle `config.ENRICHERS["honeypot_recon"]` (arranca en
+`False`). `config.QUOTAS`, `config.RECON_WINDOW_HOURS`, `config.RECON_MAX_ESCALATE` y
+`config.ENRICH_TTL_DAYS` nuevos en `config.py`, tal como especificaba el plan.
+
+**Un cambio sobre lo planificado, documentado acá porque "gana la máquina":** `models.recent_ips`
+(F-B1) no traía `sensors` ni `has_payload` — necesarios para el 2º y 3er criterio de prioridad del
+residuo (§1). Se extendió la consulta (dos columnas agregadas: `COUNT(DISTINCT o.sensor)` y
+`MAX(o.payload_sha256 IS NOT NULL)`), aditivo y sin romper `test_recent_ips_filtra_por_ventana_y_origen`
+de F-B1. Segundo cambio: el constructor de `HoneypotReconEnricher` gana un parámetro `lists=None`
+que no estaba en la firma del plan — inyectar `LocalLists` (o un doble en los tests) evita que cada
+test dispare la descarga real de 1 M de IPs; sin store real, nadie más lo necesita.
+
+**Tercer ajuste sobre el diseño:** el plan no especificaba qué pasa con las IPs `noise=False` que
+exceden `max_escalate`. Se resolvió así — no se pierden en silencio: emiten igual el veredicto
+"posible actividad dirigida" pero sin el detalle de la cascada (`ipcheck` no se llama para ellas), y
+el recorte queda registrado con `runlog.record_drop("enrichers.honeypot_recon.cascada", …)`.
+
+**Los 14 tests de `tests/test_honeypot_recon.py` pasan** (nombres ASCII, sin tildes, por consistencia
+con el resto del repo — no cambia lo que fijan). Suite completa: **171 tests** (157 + 14),
+`venv/bin/pytest tests/ -q` verde.
+
+**Verificado con datos reales del store** (`data/archivo.db`, cargado por el colector antes de esta
+sesión): 3 IOCs — `162.142.125.7` (Censys, `klass=scanner`) y dos IPs `unknown`
+(`45.9.148.99`, `45.9.148.52`). Corrida real (`LocalLists` real, 1,08 M de IPs cargadas y sin
+coincidencias para ninguna de las dos), con `_check_greynoise`/`_cascade` **mockeados a propósito**
+—no se gastó cuota real de GreyNoise sin confirmación explícita del usuario—, ejecutada sobre una
+conexión sin commit (no se escribió nada en el store real: verificado con
+`sqlite3 data/archivo.db "select * from enrichment"` → vacío después de la corrida). Log real:
+
+```
+    lists: cargadas {'jamesbrine': 1064397, 'ipsum': 113228, 'firehol_tor': 1414, 'firehol_level1': 4606, '_ram_mb': 4.86}
+    [honeypot-recon] ventana 26h: 3 IPs del store
+    [honeypot-recon]   escáneres descartados: 1
+    [honeypot-recon]   resueltas por cache: 0 (0 consultas)
+    [honeypot-recon]   en listas locales: 0
+    [honeypot-recon]   residuo: 2 → presupuesto week 20, usadas 0
+    [honeypot-recon]   consultadas: 2 → 0 noise=true, 2 noise=FALSE
+    [honeypot-recon]   escaladas a cascada: 2
+    [honeypot-recon]   señal fuerte: 2
+```
+
+`venv/bin/separatio --dry-run` corrió limpio con el toggle todavía en `False` (35 s, 59/59 resúmenes,
+0 fallidos, status `ok`) — el criterio "el pipeline nunca se rompe por una fase nueva" se sostiene.
+
+**Lo que falta para el criterio de hecho completo:** el punto 2 (contrastar
+`select source, count(*) from enrichment … group by source` contra el log) requiere una corrida real
+con el toggle en `True` y GreyNoise real — no se hizo en esta sesión por la misma razón que el mock:
+gastar las 20 consultas semanales reservadas es una decisión del usuario, no una que tome sola una
+sesión de verificación. Queda como pendiente explícito (abajo).
 
 ## Pendientes que deja
 
-*(a completar. Previsible: prender el toggle `honeypot_recon` en el CT tras verificar, y decidir si
-`ENRICHERS["honeypot"]` —el enricher directo— también se prende cuando haya dato real)*
+1. **Prender `honeypot_recon` en `config.ENRICHERS` y correr una vez con GreyNoise real** (fuera de
+   esta sesión, a pedido del usuario): confirma el punto 2 del criterio de hecho —que
+   `quota_used` contra `enrichment` coincida con lo que muestra el log— y consume cuota real por
+   primera vez. Con el store actual (2 IPs candidatas) el gasto sería de 2/20 semanales.
+2. Desplegar al CT 113 (mismo `git pull`, sin variables nuevas — `QUOTAS`/`RECON_*`/`ENRICH_TTL_DAYS`
+   están todos con default en `config.py`).
+3. Decidir si `ENRICHERS["honeypot"]` (el enricher directo, F3) también se prende cuando haya más
+   tráfico real — sigue en `False` por la misma razón de siempre (esperar dato real, no sintético).
+4. F-D (reincidencia) puede afinar el criterio 1 del orden de prioridad del residuo (`days_seen`);
+   hoy es un conteo simple, no una serie temporal.

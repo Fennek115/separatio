@@ -45,8 +45,11 @@ def _default_cap() -> int:
     except Exception:
         return DEFAULT_PROMPT_CAP
 
-# Detección mínima de tipo de IOC (independiente de pipeline.py para evitar
-# import circular). Coincide con _detect_ioc_type del pipeline.
+# Detección mínima de tipo de IOC, para decidir a qué enricher mandar cada IOC.
+# NO es la misma que `ioc_processor.detect_ioc_type` (la que etiqueta las filas
+# de iocs.csv): ésta colapsa los tres hashes en "hash" y asume el IOC ya
+# normalizado por normalize_ioc(). Las diferencias están tabuladas en el
+# docstring de ioc_processor.py — se dejaron separadas a propósito (F-G/G-3).
 _IP_RE     = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 _DOMAIN_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}$")
 

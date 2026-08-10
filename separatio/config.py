@@ -251,8 +251,15 @@ ENRICHERS = {
     "onion_lookup":   True,
     "honeypot":       False,   # F3: prender cuando el colector pull traiga datos reales
     "malwarebazaar":  True,    # punto-5: ON (usa ABUSECH_API_KEY del .env; no-op si falta)
+    "honeypot_recon": False,   # F-C: prender cuando se verifique con tráfico real del honeypot
 }
 
+# NO usar levels/3.txt acá: verificado por HTTP en F-E (2026-08-09) que esos
+# ficheros vienen sin score por línea (son el ipsum.txt base ya filtrado del
+# lado del servidor) — el plan de la fase asumía que sí lo traían y no era así
+# ("gana la máquina"). El score que necesita LocalLists.lookup() para el detail
+# de IPsum sólo existe en el agregado `ipsum.txt` (formato "IP<TAB>score");
+# 113k líneas siguen siendo ~1 MB, irrelevante en descarga y en RAM.
 IPSUM_URL       = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
 IPSUM_MIN_SCORE = 3      # nº mínimo de listas públicas que reportan la IP
 OPENPHISH_URL   = "https://openphish.com/feed.txt"
@@ -279,6 +286,37 @@ ONIONLOOKUP_MAX = 10     # tope de lookups por run (lo normal es 0 .onion/día)
 # Security List que abre SSH al honeypot desde casa — ver honeypot/DEPLOY.md).
 HONEYPOT_DATA      = str(REPO_ROOT / "data" / "honeypot" / "attackers.json")
 HONEYPOT_MAX_NOTES = 10
+
+# honeypot_recon (F-C del rework): el enricher inverso — "esta IP me pegó,
+# ¿es actor conocido o ruido de internet?", sobre las IPs del store, no las
+# de los artículos. GreyNoise sin API key mide 25 consultas por SEMANA
+# (cabecera x-ratelimit-limit, verificado 2026-08-09; su doc dice "10/día" y
+# no es así) y los 404 también consumen cuota — de ahí el margen de 5.
+QUOTAS: dict = {
+    "greynoise":  {"limit": 20, "window": "week"},
+    "virustotal": {"limit": 400, "window": "day"},
+    "abuseipdb":  {"limit": 800, "window": "day"},
+    "otx":        {"limit": 500, "window": "day"},
+}
+RECON_WINDOW_HOURS = 26     # margen sobre 24h, igual que RANSOMWARE_LOOKBACK_HOURS
+RECON_MAX_ESCALATE = 5      # tope de IPs que escalan a la cascada completa por corrida
+
+# reincidencia (F-D del rework — separatio/store/queries.py): misma ventana
+# que TREND_WINDOW_DAYS, por coherencia del informe. HASSH_MIN_IPS=3: por
+# debajo es ruido de clientes SSH comunes (OpenSSH de una distro popular
+# comparte HASSH entre usuarios legítimos sin relación entre sí).
+RECURRENCE_WINDOW_DAYS = 14
+HASSH_MIN_IPS          = 3
+HASSH_WINDOW_DAYS      = 30
+
+# TTL del cache de enrichment por fuente (`enrichment.expires_at`, F-B1).
+# GreyNoise coincide con su ventana de cuota; el resto no cambia en horas.
+ENRICH_TTL_DAYS: dict = {
+    "greynoise":  7,
+    "abuseipdb":  30,
+    "virustotal": 30,
+    "otx":        30,
+}
 
 # ─────────────────────────────────────────────
 # HIGIENE DE LA ENTRADA (F-A del rework — separatio/hygiene.py)
@@ -313,6 +351,43 @@ SCANNER_CLASSIFY    = _env_bool("SCANNER_CLASSIFY", True)
 SCANNER_PTR_LOOKUP  = _env_bool("SCANNER_PTR_LOOKUP", True)
 SCANNER_PTR_TIMEOUT = 3      # segundos por PTR (thread daemon que se abandona)
 SCANNER_PTR_MAX     = 500    # tope de consultas por corrida
+
+# ─────────────────────────────────────────────
+# EL STORE (F-B1 del rework — separatio/store/)
+# ─────────────────────────────────────────────
+# El archivo de inteligencia: un fichero SQLite con los indicadores, cada
+# avistamiento, el cache de enriquecimiento y el corpus de payloads. Es lo que
+# le da memoria al pipeline — sin él no se puede decir "esta IP volvió N días".
+#
+# SQLite y no Yeti/MISP: el CT 113 tiene 512 MiB (ArangoDB no entra), MISP
+# resuelve un problema de compartición que acá no existe, y sqlite3 es stdlib.
+#
+# El toggle apaga el store entero: `open_store()` devuelve None y todo lo que lo
+# use sigue sin él. Sirve para descartar el store como causa de un problema en
+# el CT sin editar código.
+STORE_ENABLED        = _env_bool("STORE_ENABLED", True)
+STORE_PATH           = str(REPO_ROOT / "data" / "archivo.db")
+STORE_RETENTION_DAYS = 180   # sólo se poda `observation`; ioc/payload/enrichment son permanentes
+
+# ─────────────────────────────────────────────
+# LISTAS LOCALES (F-E del rework — separatio/lists.py)
+# ─────────────────────────────────────────────
+# El filtro gratis: pertenencia de IPs en cuatro blocklists agregadas, en
+# memoria (array('I') + bisect, 4 bytes por IP), para achicar el residuo antes
+# de que el enricher inverso (F-C) gaste las 25 consultas semanales de
+# GreyNoise. No es un Enricher — lo consulta F-C sobre las IPs del honeypot,
+# no sobre los IOCs de los artículos.
+LOCAL_LISTS_ENABLED = _env_bool("LOCAL_LISTS_ENABLED", True)
+FEED_CACHE_DIR      = str(REPO_ROOT / "data" / "feeds")
+FEED_TTL_HOURS      = 12    # copia vencida ⇒ redescarga; fallo de red ⇒ se usa igual (fail-open)
+LOCAL_LISTS = {
+    # más se parece a nuestro sensor: SSH/Telnet/portscan de honeypots reales,
+    # no reportes de terceros. TLP:White, no comercial.
+    "jamesbrine":     "https://jamesbrine.com.au/iplist.txt",
+    "ipsum":          IPSUM_URL,   # ipsum.txt base — el único con score por línea
+    "firehol_tor":    "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/tor_exits.ipset",
+    "firehol_level1": "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
+}
 
 # malwarebazaar (abuse.ch): cruza hashes del día contra MalwareBazaar y marca la
 # familia. Señal fuerte si el hash ADEMÁS está en el corpus del honeypot propio

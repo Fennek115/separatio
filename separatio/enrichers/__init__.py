@@ -70,6 +70,19 @@ def build_enrichers(config) -> list[Enricher]:
             max_notes=getattr(config, "HONEYPOT_MAX_NOTES", 10),
         ))
 
+    if toggles.get("honeypot_recon"):
+        from separatio.enrichers.honeypot_recon import HoneypotReconEnricher
+        enrichers.append(HoneypotReconEnricher(
+            window_hours=getattr(config, "RECON_WINDOW_HOURS", 26),
+            max_escalate=getattr(config, "RECON_MAX_ESCALATE", 5),
+            quotas=getattr(config, "QUOTAS", {}),
+            ttl_days=getattr(config, "ENRICH_TTL_DAYS", {}),
+            vt_sleep=getattr(config, "ENRICH_VT_SLEEP", 15),
+            recurrence_window_days=getattr(config, "RECURRENCE_WINDOW_DAYS", 14),
+            hassh_min_ips=getattr(config, "HASSH_MIN_IPS", 3),
+            hassh_window_days=getattr(config, "HASSH_WINDOW_DAYS", 30),
+        ))
+
     if toggles.get("malwarebazaar"):
         from separatio.enrichers.malwarebazaar import MalwareBazaarEnricher
         enrichers.append(MalwareBazaarEnricher(

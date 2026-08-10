@@ -1,6 +1,6 @@
 # F-D · Memoria temporal: reincidencia
 
-> Estado: **☐ pendiente — sesión 5** · Depende de: **F-C** (y por tanto F-B1/F-B2)
+> Estado: **☑ código y tests hechos el 2026-08-09 — verificación en vivo pendiente (sin tráfico SSH)** · Depende de: **F-C** (y por tanto F-B1/F-B2)
 > Diseño: [`../PLAN-REWORK.md`](../PLAN-REWORK.md) §F-D · Índice: [`../REWORK-ESTADO.md`](../REWORK-ESTADO.md)
 >
 > **Completamente especificada. Ejecutar y documentar.**
@@ -162,8 +162,87 @@ sqlite3 data/archivo.db "select value, days_seen, times_seen from ioc
 
 ## As-built
 
-*(vacío hasta el cierre — la frase real del informe y la consulta SQL que la respalda)*
+**Bloque "¿Ya está hecho?" al arrancar (2026-08-09)**, contra `data/archivo.db` real:
+
+```
+$ sqlite3 data/archivo.db "select value, kind, days_seen, times_seen from ioc order by days_seen desc limit 10"
+45.9.148.52|ip|1|10
+45.9.148.99|ip|1|14
+162.142.125.7|ip|1|12
+$ sqlite3 data/archivo.db "select count(*) from ioc where days_seen >= 2"
+0
+$ sqlite3 data/archivo.db "select count(*) from ioc where kind='hassh'"
+0
+$ grep -rn "reincident\|days_seen" separatio/enrichers/
+separatio/enrichers/honeypot_recon.py:132:            -int(r.get("days_seen") or 0),   # F-C: el days_seen plano, sin ventana
+```
+
+Confirmó lo que ya avisaba `REWORK-ESTADO.md`: nada de F-D estaba hecho, y el store real no
+tiene reincidencia ni HASSH todavía (0 eventos de Cowrie con HASSH, el sensor no está expuesto).
+
+**Código y tests, ejecutados tal como estaban especificados** — sin desvíos del documento:
+
+- `separatio/store/queries.py`: `ip_recurrence`, `payload_history`, `hassh_fanout`, `top_recurrent`
+  — las cuatro consultas literales del plan, exportadas desde `separatio.store` (`from separatio.store
+  import queries`, igual que `models`).
+- `separatio/enrichers/honeypot_recon.py`, tres puntos de inserción sobre lo que F-C ya tenía:
+  - la prioridad del residuo usa `queries.ip_recurrence()` (días dentro de `RECURRENCE_WINDOW_DAYS`)
+    en vez del `days_seen` plano de la fila (que es de la vida entera del indicador);
+  - `_emit_signal` ahora recibe `conn`/`now` y le antepone `"volvió N de los últimos M días; "` al
+    `detail` de todo veredicto de señal fuerte (cache, escalada y sin-cascada por igual);
+  - `_recurrence_notes()` nuevo: una nota `"IP reincidente: …"` por cada IP no-escáner con
+    `days_seen >= 2` en la ventana (tope 5, vía `top_recurrent`), una nota `"payload ya conocido: …"`
+    por cada payload con `times_seen > 1` visto en un avistamiento de la ventana, y una nota
+    `"HASSH … huella de botnet"` por cada fingerprint que exceda `HASSH_MIN_IPS`.
+- `config.py`: `RECURRENCE_WINDOW_DAYS = 14`, `HASSH_MIN_IPS = 3`, `HASSH_WINDOW_DAYS = 30`, cableadas
+  en `enrichers/__init__.py` (factory de `HoneypotReconEnricher`).
+- `tests/test_store_queries.py`: las 9 pruebas de la tabla del plan, todas contra `:memory:` con
+  datos sembrados (la última, `test_el_veredicto_incluye_la_reincidencia`, instancia el enricher
+  entero con dobles de GreyNoise/cascada, como ya hace `test_honeypot_recon.py`).
+
+```
+$ venv/bin/pytest tests/ -q
+180 passed in 4.59s
+```
+
+(171 antes de F-D + 9 nuevos = 180. Ningún test de F-C se tocó ni se rompió — la firma de
+`_emit_signal` cambió pero sólo la usan `_run`/`_escalate`, no los tests, que llaman a `_run()`.)
+
+**Smoke test manual** (no forma parte de la suite, sólo verificación de humo con los tres tipos de
+nota juntos — `:memory:`, dobles de red): confirmó que las tres notas y el veredicto con reincidencia
+se emiten juntos sin excepciones:
+
+```
+IP reincidente: 40.0.0.1 volvió 3 de los últimos 14 días (0 hits)
+payload ya conocido: ffffffff… desde 2026-07-30, visto 2 veces
+HASSH aaaaaaaa… visto desde 3 IPs distintas en 30 días — mismo cliente SSH, huella de botnet
+---verdicts---
+40.0.0.1 | volvió 3 de los últimos 14 días; no figura en jamesbrine/IPsum/FireHOL; GreyNoise no la ve escanear internet
+```
+
+(el "(0 hits)" es un artefacto del script de humo, que sembró observaciones con `upsert_ioc(...,
+count=False)` directo en vez de pasar por `ingest_run()` — en producción `times_seen` lo lleva la
+ingesta real de F-B2.)
+
+**Regresión del pipeline**: `venv/bin/separatio --dry-run` corrió limpio (28 s, 59/59 resumidos, 0
+fallidos, aislado en `reports/dryrun/`) — el enricher construye igual con el toggle en su valor por
+defecto (`honeypot_recon: False`), y se verificó por separado que `build_enrichers()` lo instancia
+con los tres parámetros nuevos (`recurrence_window_days=14`, `hassh_min_ips=3`,
+`hassh_window_days=30`) cuando el toggle está en `True`.
+
+**⚠️ Criterio de hecho NO cumplido sobre dato real** (tal como avisaba el documento): el store de
+producción sigue sin ninguna IP con `days_seen >= 2` ni HASSH — 0 tráfico SSH real contra el sensor
+todavía. Se cierra la parte de código y tests; **la verificación en vivo (una frase de reincidencia
+citada en el informe del día, respaldada por la consulta SQL) queda pendiente explícito** hasta que
+el honeypot reciba tráfico SSH repetido. No se declara hecha con datos sintéticos, según la letra del
+documento.
 
 ## Pendientes que deja
 
-*(a completar)*
+1. ⚠️ **Verificación en vivo bloqueada por falta de tráfico SSH real** (ver aviso operativo arriba):
+   cuando el sensor Cowrie empiece a ver reincidencia real, correr el bloque del criterio de hecho
+   (`grep` sobre el informe del día + la consulta SQL de `ioc`) y pegar la salida acá.
+2. `honeypot_recon` sigue en `False` (decisión del usuario, gasta cuota real de GreyNoise) — F-D no
+   cambia esa decisión, sólo mejora lo que el enricher va a decir el día que se prenda.
+3. Falta desplegar al CT 113 junto con el resto de fases pendientes (ver `CLAUDE.md` §Pendiente #0)
+   — `queries.py` no trae variables de entorno nuevas, `git pull` alcanza.

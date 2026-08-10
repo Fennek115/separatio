@@ -40,9 +40,12 @@ Pendiente (en orden):
      en Sonnet 5/Opus 5) — se filtran solo los bloques de texto en vez de `content[0]`.
    - `config.py`: `PHASE_MAX_TOKENS` subidos (16000/12000/8000/3000/4000) — max_tokens ahora
      tapa thinking+texto y los valores viejos truncaban todas las fases al 100%.
-   Bugs menores vistos y NO arreglados: enricher OpenPhish falla con "Invalid IPv6 URL"
-   (tolerado por el try/except de Stage 2.7); warnings "discarding data: None" de
-   trafilatura en Stage 1 (cosmético).
+   Bugs menores vistos entonces, arreglados 2026-08-09 (F-G G-7 del rework, ver
+   `../docs/fases/F-G.md`): enricher OpenPhish fallaba con "Invalid IPv6 URL" ante un `[`
+   suelto en el netloc de una URL malformada del feed o de un IOC extraído — perdía la
+   fuente entera esa corrida, no sólo la línea puntual (`_safe_netloc()` en
+   `enrichers/openphish.py`); warnings "discarding data: None" de trafilatura en Stage 1
+   (cosmético — su logger propio bajado a ERROR en `extractor.py`).
 5. **Dónde corre y automatización: decisión diferida.** El reorden previo (monorepo +
    packaging) se completó el 2026-08-08; falta solo decidir ubicación (LXC nuevo en
    `motherbase` es lo natural) y timer. No crear CTs ni crons sin esa decisión.
@@ -81,7 +84,7 @@ Current (cloud, `PROVIDER = "claude"`):
 | Phases latam / general | `claude-haiku-4-5-20251001` |
 | Stage 4 synthesis | `claude-opus-5` |
 
-**Multi-provider**: `PROVIDER` in `config.py` selects `"ollama"` | `"claude"` | `"openai"` | `"gemini"`. API keys read from env vars `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (loaded from `~/Projects/Intel/.env` by `pipeline.py`).
+**Multi-provider**: `PROVIDER` in `config.py` selects `"ollama"` | `"claude"` | `"openai"` | `"gemini"`. API keys read from env vars `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (loaded from `~/Projects/Intel/.env` by `pipeline.py`). **Since F-G/G-5 (2026-08-09, see `../docs/fases/F-G.md`):** the dispatch lives in `separatio/providers/` (`LLMProvider` ABC + one subclass per provider + `get_provider()` factory), not as `if provider == ...` inside `analyzer._llm_chat` anymore — `analyzer.py` just asks the factory and logs usage.
 
 Legacy Ollama notes (only relevant if `PROVIDER = "ollama"` returns): sequential swap via `unload_model()` (`keep_alive=0` after Stage 2); `PARALLEL_WORKERS` must drop back to 1 because CPU-only Ollama serializes requests and the second worker's httpx timeout fires while queued.
 

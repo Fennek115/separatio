@@ -1,6 +1,6 @@
 # F-E · Listas locales: el filtro que no cuesta cuota
 
-> Estado: **☐ pendiente — sesión 3** · Depende de: **F-B1** (cachea el cruce)
+> Estado: **☑ Hecha el 2026-08-09** · Depende de: **F-B1** (cachea el cruce)
 > **Adelantada respecto del plan original**: se ejecuta *antes* que F-C, porque es lo que achica el
 > residuo sobre el que F-C gasta las 25 consultas semanales de GreyNoise.
 > Evidencia: [`../CAPAS-Y-FUENTES.md`](../CAPAS-Y-FUENTES.md) · Índice: [`../REWORK-ESTADO.md`](../REWORK-ESTADO.md)
@@ -180,12 +180,73 @@ lo que **no** vale es cerrar la fase sin el número.
 
 ## As-built
 
-*(vacío hasta el cierre — la salida de los tres comandos, con la RAM real del CT)*
+**Hallazgo de la sesión, antes que los números: el plan tenía un dato mal verificado.**
+`levels/3.txt` de IPsum **no trae score por línea** — son IPs ya pre-filtradas del lado del
+servidor, sin la columna de conteo. El score ("reportada en N listas") sólo existe en el agregado
+`ipsum.txt` base (formato `IP<TAB>score`, 113 k líneas). Se corrigió `config.IPSUM_URL` para no
+cambiarlo (se queda en `ipsum.txt`) — el ahorro de ancho de banda que proponía el plan (16,7 k vs
+113 k líneas, ambas triviales en descarga y en RAM) no vale la pérdida del dato que la fase pide
+mostrar en el `detail`. Corregido en el documento, no sólo en el código: "gana la máquina".
+
+**Segundo hallazgo, de RAM:** la primera versión (`text.splitlines()` sobre la respuesta HTTP
+completa) materializaba ~1,06 M objetos string de golpe para jamesbrine — medido en el CT con
+`systemd-run -p MemoryMax=120M`: **pico real 128,8 MB**, por encima del techo (no murió: el cgroup
+recurrió a swap en vez de matar el proceso, pero no entraba limpio). Dos fixes, ambos sin cambiar el
+resultado: (1) `_SourceList.build()` y `_parse_ipsum_scores()` iteran el archivo de cache abierto
+línea por línea en vez de materializar la lista completa; (2) `array("I", sorted(flat_ints))` en vez
+de `sorted(set(flat_ints))` — el `set()` intermedio sobre 1 M de enteros sumaba ~25-40 MB más sin
+aportar nada (un duplicado en el array sólo desperdicia 4 bytes; `bisect` lo tolera). Con los dos
+fixes: **67,3 MB de pico** en el laptop (`tracemalloc`, antes 104,9 MB con sólo el fix 1) y
+**79,8 MB de pico real en el CT** (antes 128,8 MB) — dentro del techo de 120 MB, sin tocarlo.
+
+```
+# 1. Laptop — tracemalloc, load() forzado (sin cache)
+$ venv/bin/python -c "
+import tracemalloc; tracemalloc.start()
+from separatio.lists import LocalLists
+l = LocalLists.from_config(); l.load(force=True)
+print(l.stats())
+print('RAM (tracemalloc, pico):', round(tracemalloc.get_traced_memory()[1]/1e6,1), 'MB')"
+{'jamesbrine': 1064397, 'ipsum': 113228, 'firehol_tor': 1414, 'firehol_level1': 4606, '_ram_mb': 4.86}
+RAM (tracemalloc, pico): 67.3 MB
+
+# 2. CT 113 — techo duro de 120 MB, código copiado a /tmp/f-e-check (no tocó /opt/intel/app:
+#    el deploy real de esta fase sigue pendiente, como el resto de las fases del rework)
+$ ssh proxmox 'pct exec 113 -- systemd-run --scope -p MemoryMax=120M --quiet \
+    /opt/intel/app/venv/bin/python3 -c "
+import sys, resource, time
+sys.path.insert(0, \"/tmp/f-e-check\")
+from separatio.lists import LocalLists
+t0 = time.time()
+l = LocalLists.from_config(); l.load(force=True)
+print(l.stats())
+print(\"tiempo:\", round(time.time()-t0,1), \"s\")
+print(\"peak RSS MB:\", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024)"'
+{'jamesbrine': 1064397, 'ipsum': 113228, 'firehol_tor': 1414, 'firehol_level1': 4606, '_ram_mb': 4.86}
+tiempo: 4.8 s
+peak RSS MB: 79.8125
+
+# 3. La suite
+$ venv/bin/pytest tests/ -q
+157 passed in 4.87s
+```
+
+11 tests nuevos en `tests/test_lists.py` (146 previos + 11 = **157**). El número real de líneas por
+fuente coincide con lo medido en la tabla del plan salvo IPsum (113.228 hoy contra las 16.782 de
+`levels/3.txt` que el plan había medido — es el fichero correcto, base, no el filtrado) y jamesbrine
+(1.064.397 contra 1.063.843 del 2026-08-09: el feed se actualiza solo, la diferencia es normal).
 
 ## Pendientes que deja
 
-*(a completar. Previsible: `data/feeds/` suma ~15 MB al disco del CT (3,2 G libres, no es problema)
-y el primer `load()` del día baja 15 MB — anotar si hay que espaciar la descarga)*
+- **Desplegar al CT 113**, como el resto de las fases del rework — ver `REWORK-ESTADO.md`
+  §Pendientes de despliegue. `data/feeds/` va a sumar ~15-16 MB al disco (3,2 G libres, no es
+  problema) y el primer `load()` del día baja esos ~15 MB una vez (TTL de 12 h).
+- El servicio queda **listo pero sin nadie que lo llame todavía**: ningún enricher ni etapa del
+  pipeline usa `LocalLists` — lo hace F-C (el enricher inverso), que lo consulta sobre las IPs del
+  honeypot. Igual que F-B1 dejó el store sin cablear hasta F-B2, esta fase deja el filtro sin
+  cablear hasta F-C.
+- No se agregó `LOCAL_LISTS_ENABLED` a ningún try/except todavía porque nadie llama a `LocalLists`
+  en el pipeline — el toggle está en `config.py`, a la espera de que F-C lo respete.
 
 ## Nota de licencias
 

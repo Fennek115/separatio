@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from separatio import runlog
+from separatio.providers import get_provider
 
 logger = logging.getLogger(__name__)
 
@@ -306,18 +307,6 @@ def _strip_llm_output(text: str) -> str:
     return text.strip()
 
 
-def _build_options(num_ctx: int, num_predict: int,
-                   temperature: float, num_threads: int) -> dict:
-    options: dict = {
-        "temperature": temperature,
-        "num_predict": num_predict,
-        "num_ctx": num_ctx,
-    }
-    if num_threads > 0:
-        options["num_thread"] = num_threads
-    return options
-
-
 def _effort_for(phase: str, model: str) -> str | None:
     """`output_config.effort` de la fase, o None si no corresponde.
 
@@ -328,22 +317,6 @@ def _effort_for(phase: str, model: str) -> str | None:
     if "haiku" in (model or "").lower():
         return None
     return (getattr(config, "PHASE_EFFORT", {}) or {}).get(phase)
-
-
-def _get_api_key(provider: str) -> str:
-    from separatio import config
-    keys = {
-        "claude": getattr(config, "ANTHROPIC_API_KEY", ""),
-        "openai": getattr(config, "OPENAI_API_KEY", ""),
-        "gemini": getattr(config, "GEMINI_API_KEY", ""),
-    }
-    key = keys.get(provider, "")
-    if not key:
-        raise ValueError(
-            f"API key para '{provider}' no configurada. "
-            f"Revisa config.py o la variable de entorno correspondiente."
-        )
-    return key
 
 
 # Truncation signals per provider
@@ -393,98 +366,52 @@ def _llm_chat(
     resto de los proveedores: `output_schema` garantiza JSON válido contra el
     esquema (sólo lo usa Stage 2 — las fases 3 y 4 producen Markdown) y `effort`
     regula la profundidad de razonamiento. **Haiku 4.5 no acepta `effort`**: el
-    llamador decide, acá sólo se pasa lo que llegue."""
+    llamador decide, acá sólo se pasa lo que llegue.
+
+    El dispatch por proveedor vive en `separatio/providers/` (F-G/G-5) — acá
+    sólo queda pedirle el proveedor a la fábrica y loguear el consumo."""
     t0 = time.monotonic()
-    if provider == "ollama":
-        import ollama
-        client = ollama.Client(host=ollama_host, timeout=timeout)
-        options = _build_options(num_ctx, max_tokens, temperature, num_threads)
-        response = client.chat(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user},
-            ],
-            think=thinking,
-            options=options,
-        )
-        in_tok  = response.get("prompt_eval_count", 0)
-        out_tok = response.get("eval_count", 0)
-        done_reason = response.get("done_reason", "stop")
-        _log_usage(provider, in_tok, out_tok, done_reason, max_tokens,
-                   stage=stage, model=model, duration_s=time.monotonic() - t0)
-        return _strip_llm_output(response["message"]["content"])
+    prov = get_provider(provider, ollama_host)
+    result = prov.chat(
+        system=system, user=user, model=model, max_tokens=max_tokens,
+        temperature=temperature, timeout=timeout, thinking=thinking,
+        num_ctx=num_ctx, num_threads=num_threads,
+        output_schema=output_schema, effort=effort,
+    )
+    _log_usage(provider, result.in_tok, result.out_tok, result.finish, max_tokens,
+               stage=stage, model=model, duration_s=time.monotonic() - t0)
+    return _strip_llm_output(result.text)
 
-    elif provider == "claude":
-        import anthropic
-        client = anthropic.Anthropic(api_key=_get_api_key("claude"))
-        # Los modelos Claude actuales (Sonnet 5 / Opus 5 / 4.7+) rechazan los
-        # parámetros de sampling (temperature/top_p/top_k) con 400 — se omiten.
-        kwargs: dict = {}
-        output_config: dict = {}
-        if output_schema:
-            output_config["format"] = {"type": "json_schema", "schema": output_schema}
-        if effort:
-            output_config["effort"] = effort
-        if output_config:
-            kwargs["output_config"] = output_config
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            **kwargs,
-        )
-        _log_usage(provider, response.usage.input_tokens, response.usage.output_tokens,
-                   response.stop_reason, max_tokens,
-                   stage=stage, model=model, duration_s=time.monotonic() - t0)
-        # Sonnet 5 / Opus 5 piensan por defecto: content puede empezar con
-        # bloques "thinking" — quedarse solo con los bloques de texto.
-        text = "".join(b.text for b in response.content if b.type == "text")
-        return _strip_llm_output(text)
 
-    elif provider == "openai":
-        import openai
-        client = openai.OpenAI(api_key=_get_api_key("openai"))
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user},
-            ],
-        )
-        usage  = response.usage
-        finish = response.choices[0].finish_reason
-        _log_usage(provider, usage.prompt_tokens, usage.completion_tokens, finish,
-                   max_tokens, stage=stage, model=model,
-                   duration_s=time.monotonic() - t0)
-        return _strip_llm_output(response.choices[0].message.content)
-
-    elif provider == "gemini":
-        import google.generativeai as genai
-        genai.configure(api_key=_get_api_key("gemini"))
-        gemini_model = genai.GenerativeModel(
-            model_name=model,
-            system_instruction=system,
-        )
-        response = gemini_model.generate_content(
-            user,
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=max_tokens,
-                temperature=temperature,
-            ),
-        )
-        meta   = response.usage_metadata
-        finish = response.candidates[0].finish_reason.name if response.candidates else "UNKNOWN"
-        _log_usage(provider, meta.prompt_token_count, meta.candidates_token_count,
-                   finish, max_tokens, stage=stage, model=model,
-                   duration_s=time.monotonic() - t0)
-        return _strip_llm_output(response.text)
-
-    else:
-        raise ValueError(f"Provider desconocido: {provider!r}. Opciones: ollama, claude, openai, gemini")
+def _llm_chat_stream(
+    system: str,
+    user: str,
+    provider: str,
+    model: str,
+    max_tokens: int,
+    temperature: float = 0.1,
+    ollama_host: str = "",
+    timeout: int = 120,
+    thinking: bool = False,
+    num_ctx: int = 4096,
+    num_threads: int = 0,
+    on_token=None,
+):
+    """Como `_llm_chat`, pero streaming (sólo Ollama lo necesita de verdad —
+    ver `providers.base.LLMProvider.chat_stream`). No loguea el consumo: cada
+    llamador decide si y cómo lo hace, porque `generate_report` y
+    `generate_phase_report` no lo hacían igual (ver G-5 en `docs/fases/F-G.md`
+    — `generate_report` nunca llamó `_log_usage` para Ollama, y este refactor
+    no puede cambiar eso). Devuelve el `ChatResult` crudo, ya con el texto
+    despojado de `<think>`/fences."""
+    prov = get_provider(provider, ollama_host)
+    result = prov.chat_stream(
+        system=system, user=user, model=model, max_tokens=max_tokens,
+        temperature=temperature, timeout=timeout, thinking=thinking,
+        num_ctx=num_ctx, num_threads=num_threads, on_token=on_token,
+    )
+    result.text = _strip_llm_output(result.text)
+    return result
 
 
 # ─────────────────────────────────────────────────────────
@@ -614,33 +541,28 @@ def generate_report(
 
     try:
         if provider == "ollama":
-            import ollama
             # Streaming para evitar timeout en generaciones largas en CPU-only.
             # timeout aplica entre chunks, no al total.
-            client  = ollama.Client(host=ollama_host, timeout=timeout)
-            options = _build_options(num_ctx, num_predict=max_tokens,
-                                     temperature=0.3, num_threads=num_threads)
-            stream = client.chat(
+            def _on_token(total: int) -> None:
+                if total % 100 == 0:
+                    logger.info(f"  Generando informe... {total} tokens")
+
+            result = _llm_chat_stream(
+                system=REPORT_SYSTEM_PROMPT,
+                user=prompt,
+                provider=provider,
                 model=model,
-                messages=[
-                    {"role": "system", "content": REPORT_SYSTEM_PROMPT},
-                    {"role": "user",   "content": prompt},
-                ],
-                think=thinking,
-                options=options,
-                stream=True,
+                max_tokens=max_tokens,
+                temperature=0.3,
+                ollama_host=ollama_host,
+                timeout=timeout,
+                thinking=thinking,
+                num_ctx=num_ctx,
+                num_threads=num_threads,
+                on_token=_on_token,
             )
-            tokens: list[str] = []
-            total = 0
-            for chunk in stream:
-                token = chunk["message"]["content"]
-                if token:
-                    tokens.append(token)
-                    total += 1
-                    if total % 100 == 0:
-                        logger.info(f"  Generando informe... {total} tokens")
-            logger.info(f"  Informe generado: {total} tokens")
-            return _strip_llm_output("".join(tokens))
+            logger.info(f"  Informe generado: {result.out_tok} tokens")
+            return result.text
 
         else:
             # Cloud providers responden en segundos — no necesitan streaming.
@@ -1109,38 +1031,29 @@ def generate_phase_report(
 
     try:
         if provider == "ollama":
-            import ollama
-            client  = ollama.Client(host=ollama_host, timeout=timeout)
-            options = _build_options(num_ctx, num_predict=max_tokens,
-                                     temperature=0.3, num_threads=num_threads)
-            stream  = client.chat(
+            def _on_token(total: int) -> None:
+                if total % 100 == 0:
+                    logger.info(f"  [{phase}] Generando... {total} tokens")
+
+            result = _llm_chat_stream(
+                system=system_prompt,
+                user=prompt,
+                provider=provider,
                 model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": prompt},
-                ],
-                think=thinking,
-                options=options,
-                stream=True,
+                max_tokens=max_tokens,
+                temperature=0.3,
+                ollama_host=ollama_host,
+                timeout=timeout,
+                thinking=thinking,
+                num_ctx=num_ctx,
+                num_threads=num_threads,
+                on_token=_on_token,
             )
-            tokens: list[str] = []
-            total = 0
-            last_chunk: dict = {}
-            for chunk in stream:
-                last_chunk = chunk
-                token = chunk["message"]["content"]
-                if token:
-                    tokens.append(token)
-                    total += 1
-                    if total % 100 == 0:
-                        logger.info(f"  [{phase}] Generando... {total} tokens")
-            done_reason = last_chunk.get("done_reason", "stop")
-            in_tok = last_chunk.get("prompt_eval_count", 0)
-            _log_usage("ollama", in_tok, total, done_reason, max_tokens,
+            _log_usage("ollama", result.in_tok, result.out_tok, result.finish, max_tokens,
                        stage=f"phase:{phase}", model=model,
                        duration_s=time.monotonic() - t0)
-            logger.info(f"  [{phase}] Generado: {total} tokens (finish={done_reason})")
-            return _strip_llm_output("".join(tokens))
+            logger.info(f"  [{phase}] Generado: {result.out_tok} tokens (finish={result.finish})")
+            return result.text
         else:
             result = _llm_chat(
                 system=system_prompt,

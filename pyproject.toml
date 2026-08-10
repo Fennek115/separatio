@@ -32,4 +32,9 @@ ipcheck = "ipcheck.cli:main"
 ipcheck-run = "ipcheck.run:main"
 
 [tool.setuptools]
-packages = ["separatio", "separatio.enrichers", "ipcheck"]
+packages = ["separatio", "separatio.enrichers", "separatio.store", "separatio.providers", "ipcheck"]
+
+# El DDL del store va como dato del paquete: `migrate()` lo lee de disco para
+# que el esquema se pueda leer y consultar sin abrir Python (F-B1).
+[tool.setuptools.package-data]
+"separatio.store" = ["schema.sql"]
