@@ -54,12 +54,14 @@ _PRAGMAS_RO = (
 )
 
 
-def default_path() -> str:
-    """Ruta del store según `config` (o derivada del repo si config no está).
+def default_path(settings=None) -> str:
+    """Ruta del store según el `Settings` dado, el `config` global, o el repo.
 
-    El fallback existe porque el colector se invoca con el `python3` del sistema
-    y `PYTHONPATH` apuntando al repo: importar `separatio.config` funciona, pero
-    este módulo no depende de que funcione."""
+    El último fallback existe porque el colector se invoca con el `python3` del
+    sistema y `PYTHONPATH` apuntando al repo: importar `separatio.config`
+    funciona, pero este módulo no depende de que funcione."""
+    if settings is not None:
+        return str(settings.STORE_PATH)
     try:
         from separatio import config
         return str(config.STORE_PATH)
@@ -68,7 +70,9 @@ def default_path() -> str:
         return str(repo_root / "data" / "archivo.db")
 
 
-def _enabled() -> bool:
+def _enabled(settings=None) -> bool:
+    if settings is not None:
+        return bool(settings.STORE_ENABLED)
     try:
         from separatio import config
         return bool(config.STORE_ENABLED)
@@ -77,20 +81,22 @@ def _enabled() -> bool:
 
 
 def open_store(path: str | Path | None = None,
-               *, read_only: bool = False) -> sqlite3.Connection | None:
+               *, read_only: bool = False,
+               settings=None) -> sqlite3.Connection | None:
     """Abre el store y lo migra. Devuelve None si no se puede — **nunca levanta**.
 
-    `path=None` usa `config.STORE_PATH` y respeta `config.STORE_ENABLED`; una
-    ruta explícita lo abre igual (los tests pasan `":memory:"`).
+    `path=None` usa `STORE_PATH` y respeta `STORE_ENABLED` —del `Settings` que se
+    pase (F-G/G-2) o del `config` global—; una ruta explícita lo abre igual (los
+    tests pasan `":memory:"`).
     `read_only=True` abre con URI `file:…?mode=ro` y **no migra**: es como lo va
     a abrir el pipeline a partir de F-C.
     """
     explicit = path is not None
-    if not explicit and not _enabled():
+    if not explicit and not _enabled(settings):
         logger.debug("    store: deshabilitado por STORE_ENABLED")
         return None
 
-    target = str(path) if explicit else default_path()
+    target = str(path) if explicit else default_path(settings)
 
     try:
         if target != MEMORY:

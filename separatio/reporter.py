@@ -1,8 +1,19 @@
 """
 reporter.py — Renderiza el informe de threat intelligence a Markdown, HTML y PDF.
+
+Desde F-G/G-6 (2026-08-09) las plantillas viven fuera del código, en
+`separatio/templates/*.html.j2` (Jinja2), y el Markdown lo parsea la librería
+`markdown` (Python-Markdown) en vez de la batería de regex que había acá.
+
+Nota de diseño sobre el índice del PDF: la plantilla de PDF numera las páginas
+del índice con `target-counter(attr(href), page)`, así que los `href` del TOC y
+los `id` de los encabezados **tienen que salir del mismo motor** o las anclas no
+resuelven. Por eso el TOC se construye desde `md.toc_tokens` (la extensión `toc`,
+con nuestro `_slugify` inyectado) y no re-parseando el Markdown por separado.
 """
 
 import hashlib
+import html
 import os
 import re
 import logging
@@ -10,7 +21,33 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 
+import markdown
+from markdown.extensions import Extension
+from markdown.extensions.toc import TocExtension
+from markdown.preprocessors import Preprocessor
+from markdown.treeprocessors import Treeprocessor
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
 logger = logging.getLogger(__name__)
+
+# ── Plantillas ───────────────────────────────────────────────────────────────
+
+TEMPLATE_DIR = Path(__file__).parent / "templates"
+PDF_TEMPLATE = "pdf.html.j2"
+WEB_TEMPLATE = "web.html.j2"
+
+#: Columnas a partir de las cuales una tabla se marca `.table-wide` (el CSS le
+#: baja la tipografía para que entre en el A4). Era un `> 6` suelto en el parser.
+WIDE_TABLE_MIN_COLS = 6
+
+#: Profundidad del índice: sólo h1/h2, como el TOC original.
+TOC_MAX_LEVEL = 2
+
+_ENV = Environment(
+    loader=FileSystemLoader(str(TEMPLATE_DIR)),
+    autoescape=select_autoescape(["html", "j2"]),
+)
+
 
 _EMOJI_RE = re.compile(
     u"[\U00002600-\U000027BF"
@@ -38,7 +75,7 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-# ── Table of contents ────────────────────────────────────────────────────────
+# ── Slugs y tabla de contenidos ──────────────────────────────────────────────
 
 def _slugify(text: str) -> str:
     text = re.sub(r"<[^>]+>", "", text)
@@ -53,27 +90,133 @@ def _slugify(text: str) -> str:
     return text.strip("-")
 
 
-def _extract_toc_entries(markdown: str) -> list[tuple[int, str, str]]:
-    """Return [(level, display_text, slug_id)] for h1/h2 headings only."""
+def _slugify_md(value: str, separator: str = "-") -> str:
+    """Adaptador de `_slugify` a la firma que espera la extensión `toc`.
+
+    Se inyecta a propósito en vez de usar el slugify por defecto de
+    Python-Markdown: el nuestro translitera acentos (`ó`→`o`), y sobre todo
+    garantiza que `id` y `href` los genere la misma función.
+    """
+    return _slugify(value)
+
+
+def _is_table_separator(line: str) -> bool:
+    """¿Es la fila `|---|---|` que separa cabecera de cuerpo en una tabla?"""
+    s = line.strip()
+    if not s.startswith("|"):
+        return False
+    inner = s.strip("|")
+    return "-" in inner and set(inner) <= set("-:| \t")
+
+
+class _TableBlankLinePreprocessor(Preprocessor):
+    """Despega del párrafo anterior una tabla que quedó sin línea en blanco.
+
+    El LLM escribe seguido bastante seguido:
+
+        **IPs maliciosas:**
+        | IP | Veredicto |
+        |---|---|
+
+    Python-Markdown exige que la tabla sea su propio bloque, así que sin este
+    preprocessor se traga la tabla entera dentro del párrafo. El parser de
+    regex anterior sí la reconocía, y perderla sería una regresión — se
+    detectó comparando contra el informe real del 2026-08-08.
+
+    Corre después de `fenced_code` (prioridad 25), así que los bloques de
+    código ya están fuera del texto y nunca se tocan.
+    """
+
+    def run(self, lines: list[str]) -> list[str]:
+        out: list[str] = []
+        for i, line in enumerate(lines):
+            starts_table = (
+                line.lstrip().startswith("|")
+                and i + 1 < len(lines)
+                and _is_table_separator(lines[i + 1])
+            )
+            # `out[-1]` sin `|` evita partir en dos una tabla ya empezada.
+            glued = out and out[-1].strip() and not out[-1].lstrip().startswith("|")
+            if starts_table and glued:
+                out.append("")
+            out.append(line)
+        return out
+
+
+class _WideTableTreeprocessor(Treeprocessor):
+    """Marca las tablas de muchas columnas con `class="table-wide"`.
+
+    Python-Markdown no sabe nada de esto; es una regla de presentación nuestra
+    que el parser anterior aplicaba al construir el `<table>` a mano.
+    """
+
+    def run(self, root):
+        for table in root.iter("table"):
+            header = table.find("thead/tr")
+            if header is None:
+                continue
+            if len(header.findall("th")) > WIDE_TABLE_MIN_COLS:
+                table.set("class", "table-wide")
+
+
+class _LlmQuirksExtension(Extension):
+    """Las dos concesiones al Markdown que realmente escribe el LLM."""
+
+    def extendMarkdown(self, md):
+        md.preprocessors.register(_TableBlankLinePreprocessor(md), "table_blank_line", 20)
+        md.treeprocessors.register(_WideTableTreeprocessor(md), "wide_table", 4)
+
+
+def _new_markdown() -> markdown.Markdown:
+    """Una instancia nueva por render.
+
+    `markdown.Markdown` acumula estado entre conversiones (los `id` ya usados,
+    los `toc_tokens`) y no es thread-safe. Los informes son pocos y cortos, así
+    que construir una por render sale más barato que razonar sobre `reset()`.
+    """
+    return markdown.Markdown(
+        extensions=[
+            "tables",
+            "fenced_code",
+            TocExtension(slugify=_slugify_md),
+            _LlmQuirksExtension(),
+        ],
+        output_format="html",
+    )
+
+
+def _flatten_toc(tokens: list[dict]) -> list[tuple[int, str, str]]:
+    """`md.toc_tokens` (anidado) → [(level, texto, slug)] en orden de documento."""
     entries: list[tuple[int, str, str]] = []
-    seen: dict[str, int] = {}
-    for line in markdown.split("\n"):
-        m = re.match(r"^(#{1,2})\s+(.*)", line)
-        if not m:
-            continue
-        level = len(m.group(1))
-        raw   = m.group(2).strip()
-        # strip inline markdown for display and slug
-        clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", raw)
-        clean = re.sub(r"[*_`#]", "", clean).strip()
-        slug  = _slugify(clean)
-        if slug in seen:
-            seen[slug] += 1
-            slug = f"{slug}-{seen[slug]}"
-        else:
-            seen[slug] = 0
-        entries.append((level, clean, slug))
+
+    def walk(items: list[dict]) -> None:
+        for item in items:
+            if item["level"] <= TOC_MAX_LEVEL:
+                entries.append((item["level"], item["name"], item["id"]))
+            walk(item.get("children") or [])
+
+    walk(tokens)
     return entries
+
+
+def _render_markdown(markdown_text: str) -> tuple[str, list[tuple[int, str, str]]]:
+    """Convierte Markdown a HTML y devuelve también las entradas del índice.
+
+    Las dos cosas salen del mismo parseo a propósito (ver la nota del módulo).
+    """
+    md = _new_markdown()
+    body = md.convert(markdown_text)
+    return body, _flatten_toc(md.toc_tokens)
+
+
+def markdown_to_html_body(markdown_text: str) -> str:
+    """Markdown → HTML (sólo el cuerpo, sin `<html>` ni `<head>`)."""
+    return _render_markdown(markdown_text)[0]
+
+
+def _extract_toc_entries(markdown_text: str) -> list[tuple[int, str, str]]:
+    """Return [(level, display_text, slug_id)] for h1/h2 headings only."""
+    return _render_markdown(markdown_text)[1]
 
 
 def _build_toc_html(entries: list[tuple[int, str, str]]) -> str:
@@ -83,602 +226,29 @@ def _build_toc_html(entries: list[tuple[int, str, str]]) -> str:
     for level, text, slug in entries:
         lines.append(
             f'<li class="toc-h{level}">'
-            f'<a class="toc-link" href="#{slug}">{text}</a>'
+            f'<a class="toc-link" href="#{html.escape(slug, quote=True)}">{html.escape(text)}</a>'
             f'</li>'
         )
     lines += ["</ul>", "</div>"]
     return "\n".join(lines)
 
 
-PDF_HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Threat Intelligence Briefing — {date}</title>
-    <style>
-        /*
-         * Fuentes recomendadas en el servidor (LXC 112):
-         *   apt install fonts-ibm-plex
-         * Sin ellas usa Liberation Sans / DejaVu como fallback.
-         */
-        @page {{
-            size: A4;
-            margin: 2.2cm 2.5cm 2cm 2.5cm;
-            @bottom-right {{
-                content: "{report_id}  ·  " counter(page) "/" counter(pages);
-                font-size: 7.5pt;
-                color: #9ca3af;
-                font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
-            }}
-            @bottom-left {{
-                content: "Threat Intelligence  ·  {date}  ·  TLP:WHITE";
-                font-size: 7.5pt;
-                color: #9ca3af;
-                font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
-            }}
-        }}
-        @page:first {{
-            @bottom-right {{ content: none; }}
-            @bottom-left  {{ content: none; }}
-        }}
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{
-            font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
-            font-size: 10pt;
-            color: #111827;
-            line-height: 1.65;
-        }}
-
-        /* ── Portada ── */
-        .cover {{
-            padding-top: 7cm;
-            padding-bottom: 4cm;
-            page-break-after: always;
-        }}
-        .cover-rule {{
-            width: 2.8cm;
-            height: 4px;
-            background: #7c3aed;
-            margin-bottom: 1.4rem;
-        }}
-        .cover-label {{
-            font-size: 7pt;
-            font-weight: 700;
-            letter-spacing: 0.22em;
-            color: #7c3aed;
-            text-transform: uppercase;
-            margin-bottom: 0.7rem;
-        }}
-        .cover h1 {{
-            font-size: 27pt;
-            font-weight: 700;
-            color: #1e1b4b;
-            line-height: 1.12;
-            margin-bottom: 0.35rem;
-        }}
-        .cover-date {{
-            font-size: 13pt;
-            color: #4b5563;
-            margin-bottom: 3rem;
-        }}
-        .cover-meta {{
-            font-size: 8.5pt;
-            color: #6b7280;
-            border-top: 1px solid #e5e7eb;
-            padding-top: 0.9rem;
-            line-height: 2;
-        }}
-        .cover-quote {{
-            font-size: 8.5pt;
-            font-style: italic;
-            color: #5b21b6;
-            margin: 1.8rem 0 0.6rem;
-            padding-left: 0.9rem;
-            border-left: 2px solid #c4b5fd;
-            line-height: 1.55;
-        }}
-        .cover-quote cite {{
-            font-style: normal;
-            font-size: 7pt;
-            color: #9ca3af;
-            display: block;
-            margin-top: 0.3rem;
-            letter-spacing: 0.02em;
-        }}
-        .cover-tlp {{
-            display: inline-block;
-            border: 1px solid #c4b5fd;
-            color: #6d28d9;
-            font-size: 7pt;
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            padding: 0.2em 0.65em;
-            border-radius: 2px;
-            margin-top: 1.6rem;
-        }}
-
-        /* ── Encabezados ── */
-        h1 {{
-            font-size: 15pt;
-            font-weight: 700;
-            color: #1e1b4b;
-            margin: 2rem 0 0.5rem;
-            padding-bottom: 0.4rem;
-            border-bottom: 2px solid #7c3aed;
-            page-break-after: avoid;
-        }}
-        h2 {{
-            font-size: 11pt;
-            font-weight: 600;
-            color: #1e1b4b;
-            margin: 1.4rem 0 0.4rem;
-            padding-left: 0.65rem;
-            border-left: 3px solid #7c3aed;
-            page-break-after: avoid;
-        }}
-        h3 {{
-            font-size: 10pt;
-            font-weight: 600;
-            color: #374151;
-            margin: 1rem 0 0.3rem;
-            page-break-after: avoid;
-        }}
-        h4 {{
-            font-size: 9.5pt;
-            font-weight: 600;
-            color: #4b5563;
-            margin: 0.7rem 0 0.2rem;
-        }}
-
-        /* ── Cuerpo ── */
-        p  {{ margin-bottom: 0.55rem; }}
-        ul, ol {{ padding-left: 1.3rem; margin-bottom: 0.6rem; }}
-        li {{ margin-bottom: 0.25rem; }}
-        strong {{ color: #111827; font-weight: 600; }}
-        a  {{ color: #6d28d9; text-decoration: none; }}
-        hr {{ border: none; border-top: 1px solid #e5e7eb; margin: 1.3rem 0; }}
-
-        /* ── Código ── */
-        code {{
-            font-family: "IBM Plex Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
-            font-size: 8.5pt;
-            background: #f5f3ff;
-            border: 1px solid #ddd6fe;
-            border-radius: 3px;
-            padding: 0.05em 0.3em;
-            color: #4c1d95;
-        }}
-        pre {{
-            font-family: "IBM Plex Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
-            font-size: 8.5pt;
-            background: #faf5ff;
-            border: 1px solid #ddd6fe;
-            border-left: 3px solid #7c3aed;
-            border-radius: 3px;
-            padding: 0.8rem 1rem;
-            margin-bottom: 0.8rem;
-            page-break-inside: avoid;
-        }}
-
-        /* ── Tablas ── */
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 0.9rem;
-            font-size: 8.5pt;
-            table-layout: fixed;
-            word-break: break-word;
-        }}
-        thead {{
-            display: table-header-group;
-        }}
-        tr {{
-            page-break-inside: avoid;
-            page-break-after: auto;
-        }}
-        th {{
-            background: #1e1b4b;
-            color: #f5f3ff;
-            border: 1px solid #312e81;
-            padding: 0.45rem 0.65rem;
-            text-align: left;
-            font-weight: 600;
-            font-size: 7.5pt;
-            letter-spacing: 0.05em;
-            overflow-wrap: break-word;
-        }}
-        td {{
-            border: 1px solid #e5e7eb;
-            padding: 0.4rem 0.65rem;
-            vertical-align: top;
-            overflow-wrap: break-word;
-        }}
-        tr:nth-child(even) td {{ background: #faf5ff; }}
-        /* Tablas de muchas columnas (>6): reducir font y padding para que respire */
-        table.table-wide {{
-            font-size: 7pt;
-        }}
-        table.table-wide th,
-        table.table-wide td {{
-            padding: 0.18rem 0.3rem;
-            letter-spacing: 0;
-        }}
-
-        /* ── Cita ── */
-        blockquote {{
-            border-left: 3px solid #c4b5fd;
-            padding-left: 0.8rem;
-            color: #6b7280;
-            font-style: italic;
-            margin-bottom: 0.6rem;
-        }}
-        .section-break {{ page-break-before: always; }}
-        .colophon {{
-            margin-top: 3.5rem;
-            padding-top: 1rem;
-            border-top: 1px solid #e5e7eb;
-            text-align: center;
-            font-size: 7.5pt;
-            font-style: italic;
-            color: #9ca3af;
-            letter-spacing: 0.04em;
-        }}
-        .colophon-hash {{
-            display: block;
-            margin-top: 0.5rem;
-            font-style: normal;
-            font-size: 6.5pt;
-            color: #d1d5db;
-            letter-spacing: 0.03em;
-            font-family: "IBM Plex Mono", "Liberation Mono", monospace;
-        }}
-
-        /* ── Evitar títulos huérfanos al final de página ── */
-        h1 + p, h2 + p, h3 + p,
-        h1 + ul, h2 + ul, h3 + ul,
-        h1 + ol, h2 + ol, h3 + ol,
-        h1 + table, h2 + table, h3 + table,
-        h1 + blockquote, h2 + blockquote, h3 + blockquote {{
-            break-before: avoid;
-        }}
-
-        /* ── Tabla de Contenidos ── */
-        .toc {{
-            page-break-after: always;
-            margin-top: 1rem;
-        }}
-        .toc-title {{
-            font-size: 14pt;
-            font-weight: 700;
-            color: #1e1b4b;
-            border-bottom: 2px solid #7c3aed;
-            padding-bottom: 0.4rem;
-            margin-bottom: 1.4rem;
-        }}
-        .toc-list {{
-            list-style: none;
-            padding-left: 0;
-            margin: 0;
-        }}
-        .toc-list li {{
-            margin-bottom: 0.12rem;
-        }}
-        .toc-list li.toc-h1 {{
-            font-size: 10pt;
-            font-weight: 600;
-            color: #1e1b4b;
-            margin-top: 0.5rem;
-        }}
-        .toc-list li.toc-h2 {{
-            padding-left: 1.4rem;
-            font-size: 9pt;
-            color: #4b5563;
-        }}
-        .toc-link {{
-            color: inherit;
-            text-decoration: none;
-            display: block;
-        }}
-        .toc-link::after {{
-            content: leader("·") " " target-counter(attr(href), page);
-            color: #9ca3af;
-            font-size: 8pt;
-            font-weight: normal;
-        }}
-    </style>
-</head>
-<body>
-    <div class="cover">
-        <div class="cover-rule"></div>
-        <div class="cover-label">Daily Briefing</div>
-        <h1>Threat Intelligence<br>Report</h1>
-        <div class="cover-date">{date}</div>
-        <div class="cover-quote">
-            "Separa la Tierra del Fuego, lo sutil de lo burdo,<br>pero s&eacute; prudente y circunspecto cuando lo hagas."
-            <cite>— Tabula Smaragdina, Hermes Trismegistus</cite>
-        </div>
-        <div class="cover-meta">
-            Generado: {generated_at}<br>
-            Art&iacute;culos analizados: {total_articles} &nbsp;&middot;&nbsp; Fuentes: {total_feeds}<br>
-            An&aacute;lisis automatizado &nbsp;&middot;&nbsp; Threat Intelligence Pipeline<br>
-            ID: <strong>{report_id}</strong><br>
-            <span style="font-family:'IBM Plex Mono','Liberation Mono',monospace;font-size:6.5pt;color:#9ca3af;letter-spacing:0.02em">SHA-256: {content_hash}</span>
-        </div>
-        <div class="cover-tlp">TLP:WHITE</div>
-    </div>
-    {toc}
-    {body}
-    <div class="colophon">
-        "Lo que tuve que decir sobre el funcionamiento del Sol ha concluido."
-        &nbsp;&mdash;&nbsp; Tabula Smaragdina
-        <span class="colophon-hash">SHA-256: {content_hash}</span>
-    </div>
-</body>
-</html>"""
-
-
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Threat Intelligence Briefing — {date}</title>
-    <style>
-        :root {{
-            --bg: #0d1117;
-            --surface: #161b22;
-            --border: #30363d;
-            --text: #e6edf3;
-            --muted: #8b949e;
-            --critical: #f85149;
-            --high: #ff7b72;
-            --medium: #d29922;
-            --low: #3fb950;
-            --accent: #58a6ff;
-        }}
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            line-height: 1.7;
-            padding: 2rem;
-            max-width: 960px;
-            margin: 0 auto;
-        }}
-        h1 {{ font-size: 1.8rem; color: var(--accent); margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }}
-        h2 {{ font-size: 1.25rem; color: var(--text); margin: 2rem 0 0.75rem; border-left: 3px solid var(--accent); padding-left: 0.75rem; }}
-        h3 {{ font-size: 1rem; color: var(--muted); margin: 1rem 0 0.5rem; }}
-        p  {{ margin-bottom: 0.75rem; color: var(--text); }}
-        ul, ol {{ padding-left: 1.5rem; margin-bottom: 0.75rem; }}
-        li {{ margin-bottom: 0.3rem; }}
-        code {{
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 0.1em 0.4em;
-            font-family: "JetBrains Mono", "Fira Code", monospace;
-            font-size: 0.85em;
-            color: var(--medium);
-        }}
-        pre {{
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 1rem;
-            overflow-x: auto;
-            margin-bottom: 1rem;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 1rem;
-        }}
-        th {{
-            background: var(--surface);
-            border: 1px solid var(--border);
-            padding: 0.5rem 0.75rem;
-            text-align: left;
-            color: var(--muted);
-            font-weight: 600;
-        }}
-        td {{
-            border: 1px solid var(--border);
-            padding: 0.5rem 0.75rem;
-        }}
-        blockquote {{
-            border-left: 3px solid var(--border);
-            padding-left: 1rem;
-            color: var(--muted);
-            margin-bottom: 0.75rem;
-        }}
-        .meta {{
-            color: var(--muted);
-            font-size: 0.85rem;
-            margin-bottom: 2rem;
-        }}
-        .badge {{
-            display: inline-block;
-            padding: 0.2em 0.6em;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            margin-right: 0.3rem;
-        }}
-        .critical {{ background: rgba(248,81,73,0.15); color: var(--critical); border: 1px solid var(--critical); }}
-        .high     {{ background: rgba(255,123,114,0.15); color: var(--high); border: 1px solid var(--high); }}
-        .medium   {{ background: rgba(210,153,34,0.15); color: var(--medium); border: 1px solid var(--medium); }}
-        hr {{ border: none; border-top: 1px solid var(--border); margin: 2rem 0; }}
-        a {{ color: var(--accent); text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
-        .footer {{ margin-top: 3rem; color: var(--muted); font-size: 0.8rem; text-align: center; }}
-    </style>
-</head>
-<body>
-    <div class="meta">Generado el {generated_at} · Pipeline de Threat Intelligence</div>
-    {body}
-    <div class="footer">
-        Informe generado automáticamente · {provider} · {total_articles} artículos de {total_feeds} fuentes
-    </div>
-</body>
-</html>"""
-
-
-def markdown_to_html_body(markdown_text: str) -> str:
-    """
-    Convierte Markdown básico a HTML sin dependencias externas.
-    Soporta: encabezados, listas, código, negrita, cursiva, hr, tablas.
-    """
-    lines = markdown_text.split("\n")
-    html_lines = []
-    list_tag: str | None = None   # "ul" | "ol" | None
-    in_code_block = False
-    in_table = False
-    in_thead = False   # True mientras no se haya visto la fila separadora ---
-
-    def close_list() -> None:
-        nonlocal list_tag
-        if list_tag:
-            html_lines.append(f"</{list_tag}>")
-            list_tag = None
-
-    def close_table() -> None:
-        nonlocal in_table, in_thead
-        if in_table:
-            html_lines.append("</thead>" if in_thead else "</tbody>")
-            html_lines.append("</table>")
-            in_table = False
-            in_thead = False
-
-    for line in lines:
-        # Bloques de código
-        if line.strip().startswith("```"):
-            if in_code_block:
-                html_lines.append("</code></pre>")
-                in_code_block = False
-            else:
-                close_list()
-                html_lines.append("<pre><code>")
-                in_code_block = True
-            continue
-
-        if in_code_block:
-            html_lines.append(line.replace("<", "&lt;").replace(">", "&gt;"))
-            continue
-
-        # Tablas
-        if "|" in line and line.strip().startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if not in_table:
-                close_list()
-                table_cls = ' class="table-wide"' if len(cells) > 6 else ""
-                html_lines.append(f"<table{table_cls}><thead>")
-                in_table = True
-                in_thead = True
-                html_lines.append(
-                    "<tr>" + "".join(f"<th>{_inline(c)}</th>" for c in cells) + "</tr>"
-                )
-            elif in_thead and all(re.match(r"[-:]+", c) for c in cells):
-                # fila separadora de Markdown (|---|---|): cierra thead, abre tbody
-                html_lines.append("</thead><tbody>")
-                in_thead = False
-            elif in_thead:
-                # fila de datos antes de ver el separador (tabla sin separador)
-                html_lines.append("</thead><tbody>")
-                in_thead = False
-                html_lines.append(
-                    "<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in cells) + "</tr>"
-                )
-            else:
-                html_lines.append(
-                    "<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in cells) + "</tr>"
-                )
-            continue
-        elif in_table:
-            close_table()
-
-        # Separadores
-        if re.match(r"^---+$", line.strip()):
-            close_list()
-            html_lines.append("<hr>")
-            continue
-
-        # Encabezados
-        hm = re.match(r"^(#{1,4})\s+(.*)", line)
-        if hm:
-            close_list()
-            level = len(hm.group(1))
-            text  = hm.group(2)
-            clean = re.sub(r"\[([^\]]*)\]\([^)]*\)|[*_`#]", lambda m: m.group(1) or "", text)
-            slug  = _slugify(clean)
-            html_lines.append(f'<h{level} id="{slug}">{_inline(text)}</h{level}>')
-            continue
-
-        # Listas no ordenadas
-        if re.match(r"^[\*\-]\s+", line):
-            if list_tag != "ul":
-                close_list()
-                html_lines.append("<ul>")
-                list_tag = "ul"
-            html_lines.append(f"<li>{_inline(re.sub(r'^[*-]\\s+', '', line))}</li>")
-            continue
-
-        # Listas ordenadas
-        if re.match(r"^\d+\.\s+", line):
-            if list_tag != "ol":
-                close_list()
-                html_lines.append("<ol>")
-                list_tag = "ol"
-            html_lines.append(f"<li>{_inline(re.sub(r'^\\d+\\.\\s+', '', line))}</li>")
-            continue
-
-        # Línea vacía cierra lista abierta
-        if not line.strip():
-            close_list()
-            html_lines.append("")
-            continue
-
-        # Blockquote
-        if line.startswith(">"):
-            html_lines.append(f"<blockquote><p>{_inline(line.lstrip('> '))}</p></blockquote>")
-            continue
-
-        # Párrafo normal
-        html_lines.append(f"<p>{_inline(line)}</p>")
-
-    close_list()
-    close_table()
-
-    return "\n".join(html_lines)
-
-
-def _inline(text: str) -> str:
-    """Procesa formato inline: negrita, cursiva, código, links."""
-    # Código inline
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-    # Negrita
-    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"__(.+?)__", r"<strong>\1</strong>", text)
-    # Cursiva
-    text = re.sub(r"\*(.+?)\*", r"<em>\1</em>", text)
-    # Links
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
-    return text
-
-
-def split_report_sections(markdown: str) -> dict[str, str]:
+def split_report_sections(markdown_text: str) -> dict[str, str]:
     """
     Divide el output del LLM en secciones usando los marcadores de Stage 3.
     Retorna {"vulnerability": <md>, "threat_intel": <md>} si se encuentran marcadores,
     o {"full": <md>} como fallback para compatibilidad con el formato antiguo.
+
+    (El parámetro se llamaba `markdown` hasta G-6; se renombró porque ahora
+    sombrearía al módulo `markdown` importado arriba.)
     """
     vuln = re.search(
         r"===VULNERABILITY_BRIEFING===\s*\n(.*?)(?===THREAT_INTEL_DIGEST===|===END===)",
-        markdown, re.DOTALL,
+        markdown_text, re.DOTALL,
     )
     intel = re.search(
         r"===THREAT_INTEL_DIGEST===\s*\n(.*?)(?===END===|$)",
-        markdown, re.DOTALL,
+        markdown_text, re.DOTALL,
     )
     if vuln and intel:
         return {
@@ -687,16 +257,16 @@ def split_report_sections(markdown: str) -> dict[str, str]:
         }
     # El modelo no siguió el formato — guardar como informe único
     logger.warning("Marcadores de sección no encontrados; guardando informe único.")
-    return {"full": markdown}
+    return {"full": markdown_text}
 
 
-def _render_html(content: str, template: str, date_str: str,
+def _render_html(content: str, template_name: str, date_str: str,
                  generated_at: str, total_articles: int,
                  total_feeds: int, provider: str,
                  report_id: str = "", content_hash: str = "") -> str:
-    body = markdown_to_html_body(content)
-    toc  = _build_toc_html(_extract_toc_entries(content)) if template is PDF_HTML_TEMPLATE else ""
-    return template.format(
+    body, toc_entries = _render_markdown(content)
+    toc = _build_toc_html(toc_entries) if template_name == PDF_TEMPLATE else ""
+    return _ENV.get_template(template_name).render(
         date=date_str,
         generated_at=generated_at,
         body=body,
@@ -737,16 +307,16 @@ def _write_report_file(content: str, path: str, fmt: str,
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
     elif fmt == "pdf":
-        html = _render_html(content, PDF_HTML_TEMPLATE, date_str,
-                            generated_at, total_articles, total_feeds, provider,
-                            report_id, content_hash)
-        _write_pdf(html, path)
+        html_out = _render_html(content, PDF_TEMPLATE, date_str,
+                                generated_at, total_articles, total_feeds, provider,
+                                report_id, content_hash)
+        _write_pdf(html_out, path)
     else:
-        html = _render_html(content, HTML_TEMPLATE, date_str,
-                            generated_at, total_articles, total_feeds, provider,
-                            report_id, content_hash)
+        html_out = _render_html(content, WEB_TEMPLATE, date_str,
+                                generated_at, total_articles, total_feeds, provider,
+                                report_id, content_hash)
         with open(path, "w", encoding="utf-8") as f:
-            f.write(html)
+            f.write(html_out)
 
 
 def save_report(markdown_content: str, output_dir: str,

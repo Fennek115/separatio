@@ -24,15 +24,22 @@ código, el punto de entrada es **`docs/REWORK-ESTADO.md`** (tabla de estado, pr
 prompt de arranque), no este archivo. El diseño está en `docs/PLAN-REWORK.md` y el detalle de cada
 fase en `docs/fases/`.
 
-**Fase activa: F-G (deuda técnica), por descarte.** F-A (higiene de la entrada), **F-H
-(observabilidad de la corrida)**, **F-I (afinado de prompts)**, **F-B1 (el store)**, **F-B2 (ingesta
-idempotente y backfill)**, **F-E (listas locales)**, **F-C (enricher inverso y triage)** y **F-D
-(reincidencia)** quedaron **hechas el 2026-08-09** — F-D con una salvedad: código y tests cerrados,
-pero el **cierre real está bloqueado por falta de tráfico SSH** (el store de producción tiene 0 IPs
-con `days_seen >= 2` y 0 HASSH). Las fases están **planificadas al detalle** (DDL, firmas, tests,
-comandos): una sesión ejecuta y documenta, no rediseña. F-F sigue bloqueada por corpus (0 payloads en
-disco), así que con F-D también esperando dato real, **F-G (track paralelo, deuda técnica) es la
-única fase sin dependencia de tráfico real hoy**.
+**Estado al 2026-08-09: no queda fase ejecutable sin dato real.** F-A (higiene de la entrada),
+**F-H (observabilidad de la corrida)**, **F-I (afinado de prompts)**, **F-B1 (el store)**, **F-B2
+(ingesta idempotente y backfill)**, **F-E (listas locales)**, **F-C (enricher inverso y triage)**,
+**F-D (reincidencia)** y **F-G (deuda técnica, sus siete ítems)** están hechas. Las fases estaban
+**planificadas al detalle** (DDL, firmas, tests, comandos): una sesión ejecuta y documenta, no
+rediseña.
+
+Las dos que quedan están **bloqueadas por falta de tráfico del honeypot**, no por diseño:
+
+- **F-D** tiene código y tests cerrados, pero el **cierre real espera tráfico SSH repetido**: el
+  store de producción tiene 0 IPs con `days_seen >= 2` y 0 HASSH.
+- **F-F** (YARA) espera corpus: 0 payloads en disco.
+
+Así que la próxima sesión **no tiene fase que ejecutar** hasta que el honeypot vea tráfico. Lo que
+sí hay pendiente y no depende de eso es **el despliegue al CT 113** (ver §Pendiente, punto 0):
+nueve fases hechas en el repo y ninguna corriendo todavía en producción.
 
 Primer ítem de F-G, **G-1 (partir `consolidate()`), cerrado 2026-08-09**: la función de 306 líneas
 que F-A había movido verbatim del heredoc se partió en cinco funciones de módulo —
@@ -109,7 +116,61 @@ punta. `pyproject.toml` sumó `separatio.providers` a `packages` — pidió rein
 (`pip install -e '.[dev]'`), mismo caso que F-B1 dejó anotado para `separatio.store`. As-built en
 `docs/fases/F-G.md`.
 
-Quedan G-2, G-6 sin tocar — F-G es un track de ítem-por-sesión, no se cierra de una vez.
+Sexto ítem de F-G, **G-6 (reporter con plantillas + Markdown real), cerrado 2026-08-09**: `reporter.py`
+tenía 434 líneas de HTML/CSS como strings de Python y un parser de Markdown por regex, y **cero
+tests**. El usuario eligió la **variante completa** de `IMPROVEMENTS.md` §6.2 —Jinja2 + la librería
+`markdown`—, así que este es **el único ítem de F-G que cambia la salida a propósito** y suma dos
+dependencias: la regla de la fase quedó suspendida sólo acá, y la verificación pasó de "salida
+idéntica" a "ninguna diferencia pierde contenido". `reporter.py` 830 → **400 líneas**; las plantillas
+viven en `separatio/templates/{pdf,web}.html.j2` como *package-data* (mismo criterio que
+`store/schema.sql`: se editan sin abrir Python). El parser es `markdown.Markdown` con
+`tables`/`fenced_code`/`toc` más una extensión propia con las dos concesiones al Markdown que
+realmente escribe el modelo: un **preprocessor que despega la tabla del párrafo anterior** (el LLM
+escribe `**IPs maliciosas:**` y la tabla pegada; Python-Markdown a secas se la traga entera dentro
+del `<p>` y **se perdía una de las tres tablas** del informe real — el regex viejo era más tolerante
+ahí) y el treeprocessor que marca `table-wide`. **El invariante que no se podía romper** es el índice
+del PDF: la plantilla numera sus páginas con `target-counter(attr(href), page)`, así que si los `href`
+del TOC y los `id` de los encabezados se desincronizan el índice sale sin números **sin fallar** —
+por eso el TOC ahora se construye desde `md.toc_tokens`, mismo parseo y mismo `_slugify` inyectado.
+Verificado en tres pasos: la extracción de plantillas **aislada** dio HTML byte a byte idéntico (así
+el diff posterior es atribuible sólo al parser); el diff estructural sobre el informe real deja
+tablas, encabezados, enlaces y código **exactamente iguales** (3 tablas, 180 celdas, 1 `table-wide`)
+y los únicos 113 tokens que cambian son marcadores de lista (`-`, `1.`) que el parser viejo dejaba
+**visibles como texto** —el fuente tiene 62 sublistas indentadas que `^[*-]` nunca matcheó—, con 0
+palabras nuevas; y el PDF real con weasyprint mantiene sus 25 entradas de índice con los números
+resueltos (20 → 19 páginas). 307 tests (43 nuevos; `reporter.py` no tenía ninguno). Hallazgo de la
+sesión, preservado a propósito: el lookahead de `split_report_sections` está escrito
+`(?===THREAT…`, que Python lee con **dos** `=`, no tres, así que cada sección se queda un `=` de
+más; hoy no se dispara porque los marcadores sólo los emite la rama legacy `PHASE_REPORTS=False`.
+
+Séptimo y último ítem de F-G, **G-2 (configuración inyectable), cerrado 2026-08-09 — con esto F-G
+queda completa**. Era el ítem que el propio rework había ido empeorando (F-A tuvo que *rodear* el
+módulo global con `build_classifier(config=None)`, y F-B/F-C repitieron el patrón). Punto de partida
+medido: 97 claves, **187 accesos** a `config` en 12 ficheros, **~99 de ellos en `pipeline.py`**.
+Ahora la fuente de verdad es `separatio/settings.py` — un dataclass **congelado** `Settings` con los
+97 campos, sus defaults y los comentarios que documentaban cada valor (se movieron enteros desde
+`config.py`), más `from_env(env=None)` (el entorno es inyectable: los tests no dependen de la
+máquina) y `derive(**overrides)`. **`config.py` sobrevive como fachada de 40 líneas**
+(`SETTINGS = Settings.from_env()` + `globals().update(...)`), así que los 187 accesos y el
+`monkeypatch.setattr(config, ...)` de los tests siguen funcionando sin tocarse. **Los campos van en
+MAYÚSCULAS a propósito**: `hygiene.build_classifier` y `setup_check` leen la config **por nombre
+dinámico**, y pasarlos a snake_case los habría roto **en silencio** cayendo al default (son las
+mismas claves que un análisis estático marca como "nunca usadas" — 14 falsos negativos). **Lo que de
+verdad arregla el ítem**: `pipeline.py` *mutaba el módulo `config` en caliente*
+(`config.OUTPUT_DIR = .../dryrun`), o sea que **el aislamiento del `--dry-run` —el fix del incidente
+del 2026-08-08— dependía de reescribir un global a mitad de la corrida**; ahora es
+`pipeline.settings_for(args)`, una función pura que se testea sin arrancar el pipeline, y quedan
+**cero asignaciones a `config.X`** en el paquete. Verificado con los 97 valores idénticos (valor y
+tipo) contra el `config.py` previo —ojo al comparar: hay que cargarlo desde su ubicación real o
+`Path(__file__).parent` resuelve distinto y da 9 diferencias falsas—, con el aislamiento comprobado
+**en la máquina** (mtime y md5 de los tres artefactos reales intactos tras `--dry-run` y
+`--dry-run --report-only`; todo lo escrito cayó bajo `reports/dryrun/`), `--categories` en vivo,
+`separatio-check` OK y 339 tests (32 nuevos). Acoplamiento a `config`: **187 → 45** referencias,
+`pipeline.py` de ~99 a **9** (irreducibles: 5 son el `logging.basicConfig` que corre al importar,
+antes de que `main()` parsee los flags — por eso `pipeline.log` sigue yendo al `OUTPUT_DIR` base
+incluso en dry-run, conducta preexistente preservada).
+
+**F-G está cerrada**: G-1 … G-7, los siete ítems, hechos el 2026-08-09.
 
 Lo que dejó F-D y conviene saber antes de tocar la reincidencia: `separatio/store/queries.py`
 (`ip_recurrence`, `payload_history`, `hassh_fanout`, `top_recurrent`) convierte filas del store en
@@ -180,12 +241,15 @@ prioridad del residuo necesitaba (payload enviado, multi-sensor) — se le agreg
 
 | Qué | Detalle |
 |---|---|
-| `pyproject.toml` | Paquetes `separatio` (+`separatio.enrichers`, +`separatio.store`) e `ipcheck`. Entry points: `separatio`, `separatio-check`, `ipcheck`, `ipcheck-run`. Venv en `./venv/` (raíz) con `pip install -e '.[dev]'` |
-| `separatio/` | El pipeline (4 etapas + enriquecimiento). Detalle técnico y estado fino en su `CLAUDE.md`. Enrichers (F2, 2026-08-08): IPsum, OpenPhish, ipcheck, **Ransomware.live** (1 llamada/run, sin reintentos ante 429 — ToS; nunca guardar `screenshot`/`claim_url`) y **onion-lookup** (CIRCL, solo si hay `.onion` entre los IOCs). **Honeypot (F3, capa 4)**: `enrichers/honeypot.py` lee `data/honeypot/attackers.json` (del colector `tools/pull_honeypot.sh`) — toggle `honeypot` en OFF hasta que el pull traiga dato real. **Desde F-A (2026-08-09):** `hygiene.py` (clasifica IPs en propia / escáner / desconocida) y `honeypot_collector.py` (el consolidador del honeypot, que salió del heredoc de `tools/pull_honeypot.sh` para poder testearse). **Desde F-H (2026-08-09):** `runlog.py` — el manifiesto de la corrida (singleton de módulo con no-op, como el `logger`): registra recortes con `shown`/`total`, tokens por llamada, fuentes caídas u **omitidas**, y calcula `status` (ok/degraded/failed) y exit code. **Desde F-I (2026-08-09):** `runlog.coverage_block(phase)` (el bloque COBERTURA que se inyecta en los cinco prompts), `config.PROMPT_CAPS`/`PHASE_EFFORT`, salida estructurada en Stage 2 (`ARTICLE_SUMMARY_SCHEMA`) y tres campos nuevos en `ArticleSummary` (`attack_techniques`, `exploitation_status`, `confidence`). **Desde F-C (2026-08-09):** `enrichers/honeypot_recon.py` (`HoneypotReconEnricher`) — el enricher inverso, triage de las IPs del honeypot contra GreyNoise + la cascada de `ipcheck` con presupuesto declarativo (`config.QUOTAS`). Toggle `honeypot_recon` en OFF (gasta cuota real de GreyNoise). **Desde F-D (2026-08-09):** el mismo enricher suma la reincidencia (`store/queries.py`) al `detail` de la señal fuerte y a tres notas nuevas (IP reincidente, payload ya conocido, HASSH fanout) — sin cambiar el toggle ni el presupuesto. **Desde F-G/G-3 (2026-08-09):** `pipeline.py` bajó de 985 a 839 líneas y son tres módulos hoja los que tienen la lógica que se le fue extrayendo — `deduplicator.py` (dedup semántico por CVEs), `ioc_processor.py` (`detect_ioc_type` + `export_iocs`, sin depender de `config`) y `router.py` (qué artículo va a qué fase y qué contexto recibe cada una). `pipeline.py` los reexporta, así que `pipeline.export_iocs` y compañía siguen resolviendo. **Desde F-G/G-5 (2026-08-09):** `providers/` — `LLMProvider` (ABC) + `OllamaProvider`/`AnthropicProvider`/`OpenAIProvider`/`GeminiProvider` + `get_provider()` (fábrica), reemplaza el `if provider ==` de `analyzer._llm_chat` y el streaming de Ollama duplicado; `analyzer.py` bajó de 1241 a 1154 líneas |
+| `pyproject.toml` | Paquetes `separatio` (+`separatio.enrichers`, +`separatio.store`, +`separatio.providers`) e `ipcheck`. Entry points: `separatio`, `separatio-check`, `ipcheck`, `ipcheck-run`. Venv en `./venv/` (raíz) con `pip install -e '.[dev]'`. *Package-data*: `store/schema.sql` y `templates/*.html.j2` |
+| `separatio/settings.py` | **La configuración, como objeto** (F-G/G-2, 2026-08-09): el dataclass congelado `Settings` con los 97 campos, sus defaults y el porqué de cada valor; `from_env(env=None)` (entorno inyectable) y `derive(**overrides)`. **Editar un valor fijo se hace acá, no en `config.py`.** Los campos van en MAYÚSCULAS porque `hygiene` y `setup_check` leen por nombre dinámico |
+| `separatio/config.py` | **Fachada** de 40 líneas sobre `Settings.from_env()` (F-G/G-2): expone cada campo como constante de módulo, así `config.MAX_ARTICLES` y el `monkeypatch` de los tests siguen andando. Para código nuevo: recibir un `Settings` por parámetro y usar `config.SETTINGS` sólo de default |
+| `separatio/templates/` | **Las plantillas del informe** (F-G/G-6, 2026-08-09): `pdf.html.j2` (portada, índice y el CSS de paginado A4 con `@page`/`target-counter`) y `web.html.j2` (la vista oscura de pantalla). Son datos del paquete, no código: se editan sin abrir Python. Ojo con el índice del PDF — los `href` del TOC y los `id` de los encabezados tienen que salir del mismo motor o se rompe **en silencio** (sale sin números de página, no falla) |
+| `separatio/` | El pipeline (4 etapas + enriquecimiento). Detalle técnico y estado fino en su `CLAUDE.md`. Enrichers (F2, 2026-08-08): IPsum, OpenPhish, ipcheck, **Ransomware.live** (1 llamada/run, sin reintentos ante 429 — ToS; nunca guardar `screenshot`/`claim_url`) y **onion-lookup** (CIRCL, solo si hay `.onion` entre los IOCs). **Honeypot (F3, capa 4)**: `enrichers/honeypot.py` lee `data/honeypot/attackers.json` (del colector `tools/pull_honeypot.sh`) — toggle `honeypot` en OFF hasta que el pull traiga dato real. **Desde F-A (2026-08-09):** `hygiene.py` (clasifica IPs en propia / escáner / desconocida) y `honeypot_collector.py` (el consolidador del honeypot, que salió del heredoc de `tools/pull_honeypot.sh` para poder testearse). **Desde F-H (2026-08-09):** `runlog.py` — el manifiesto de la corrida (singleton de módulo con no-op, como el `logger`): registra recortes con `shown`/`total`, tokens por llamada, fuentes caídas u **omitidas**, y calcula `status` (ok/degraded/failed) y exit code. **Desde F-I (2026-08-09):** `runlog.coverage_block(phase)` (el bloque COBERTURA que se inyecta en los cinco prompts), `config.PROMPT_CAPS`/`PHASE_EFFORT`, salida estructurada en Stage 2 (`ARTICLE_SUMMARY_SCHEMA`) y tres campos nuevos en `ArticleSummary` (`attack_techniques`, `exploitation_status`, `confidence`). **Desde F-C (2026-08-09):** `enrichers/honeypot_recon.py` (`HoneypotReconEnricher`) — el enricher inverso, triage de las IPs del honeypot contra GreyNoise + la cascada de `ipcheck` con presupuesto declarativo (`config.QUOTAS`). Toggle `honeypot_recon` en OFF (gasta cuota real de GreyNoise). **Desde F-D (2026-08-09):** el mismo enricher suma la reincidencia (`store/queries.py`) al `detail` de la señal fuerte y a tres notas nuevas (IP reincidente, payload ya conocido, HASSH fanout) — sin cambiar el toggle ni el presupuesto. **Desde F-G/G-3 (2026-08-09):** `pipeline.py` bajó de 985 a 839 líneas y son tres módulos hoja los que tienen la lógica que se le fue extrayendo — `deduplicator.py` (dedup semántico por CVEs), `ioc_processor.py` (`detect_ioc_type` + `export_iocs`, sin depender de `config`) y `router.py` (qué artículo va a qué fase y qué contexto recibe cada una). `pipeline.py` los reexporta, así que `pipeline.export_iocs` y compañía siguen resolviendo. **Desde F-G/G-5 (2026-08-09):** `providers/` — `LLMProvider` (ABC) + `OllamaProvider`/`AnthropicProvider`/`OpenAIProvider`/`GeminiProvider` + `get_provider()` (fábrica), reemplaza el `if provider ==` de `analyzer._llm_chat` y el streaming de Ollama duplicado; `analyzer.py` bajó de 1241 a 1154 líneas. **Desde F-G/G-6 (2026-08-09):** `reporter.py` bajó de 830 a 400 líneas — las plantillas salieron a `separatio/templates/*.html.j2` (Jinja2) y el parser de Markdown por regex lo hace ahora la librería `markdown` |
 | `ipcheck/` | Librería (`ip_enricher.py`) + CLI de reputación de IPs. Su `CLAUDE.md` tiene el detalle. El enricher `ip_reputation` la importa como paquete (`from ipcheck import ip_enricher`) — `IPCHECK_DIR` y el `sys.path.insert` murieron. **Desde F-C:** también la importa `honeypot_recon.py` (`check_greynoise`, `IpEnricher` con `disabled={"greynoise"}` para no pagar dos veces la misma IP) |
 | `separatio/store/` | **El archivo de inteligencia** (F-B1, 2026-08-09): `schema.sql` (5 tablas —`ioc`, `observation`, `enrichment`, `payload`, `meta`— + 5 índices), `db.py` (`open_store`/`migrate`/`store`, WAL + `foreign_keys` + `busy_timeout`, tolerante a fallos) y `models.py` (acceso sin ORM: `upsert_ioc`, `add_observation`, `get_cached`/`put_cached`, `quota_used`, `prune_observations`, `recent_ips`…). **Desde F-B2 (2026-08-09): `ingest.py`** (`ingest_run()`, el punto único de escritura que comparten colector y backfill) y **`backfill.py`** (`python3 -m separatio.store.backfill [--since AAAA-MM-DD] [--dry-run]`, reconstruye desde `data/honeypot/by-date/*/` y reclasifica snapshots anteriores a F-A). **Desde F-C:** `recent_ips` trae además `sensors`/`has_payload` (criterio de prioridad del residuo). **Desde F-D (2026-08-09): `queries.py`** (`ip_recurrence`/`payload_history`/`hassh_fanout`/`top_recurrent` — la reincidencia acotada a ventana, no el contador de toda la vida del indicador). El fichero es `data/archivo.db` (gitignored). Sólo stdlib: lo importa el colector, que corre sin venv |
 | `separatio/lists.py` | **El filtro gratis** (F-E, 2026-08-09): `LocalLists` — pertenencia de IPs en jamesbrine + IPsum + FireHOL (tor_exits, level1) sin gastar cuota. No es un `Enricher`; lo consulta `honeypot_recon.py` (F-C) sobre las IPs del honeypot, no sobre los IOCs de los artículos. `array('I')` + bisect (4 bytes/IP), cache en `data/feeds/*.txt` con TTL de 12h y fail-open a copia vencida. 79,8 MB de pico medidos en el CT (techo 120 MB). Toggle `LOCAL_LISTS_ENABLED` |
-| `tests/` | Los **264** tests de ambos paquetes: `venv/bin/pytest tests/ -q` (sin red). 42 previos + 31 de F-A + 21 de F-H + 21 de F-I + 19 de F-B1 + 12 de F-B2 + 11 de F-E + 14 de F-C + 9 de F-D + 3 de F-G/G-7 + 45 de F-G/G-3 + 36 de F-G/G-5 |
+| `tests/` | Los **339** tests de ambos paquetes: `venv/bin/pytest tests/ -q` (sin red). 42 previos + 31 de F-A + 21 de F-H + 21 de F-I + 19 de F-B1 + 12 de F-B2 + 11 de F-E + 14 de F-C + 9 de F-D + 3 de F-G/G-7 + 45 de F-G/G-3 + 36 de F-G/G-5 + 43 de F-G/G-6 + 32 de F-G/G-2 |
 | `.env` | **EL ÚNICO** — 13 variables, gitignored (el repo es público). Espejo documentado en `.env.example` (commiteado). Lo cargan solo los entry points; las librerías leen `os.environ`. ⚠️ `ANTHROPIC_API_KEY` es **temporal** (puesta 2026-08-08, caduca en días) — reemplazar por la definitiva |
 | `feeds/feeds.opml` | Espejo curado de Miniflux (CT 112, `192.168.1.7:8080`): 40 feeds, 0 errores, bajo el usuario `threat_intel` (id 12, **no** `admin`), LATAM con 6. Verificado por API 2026-08-08 |
 | `.mcp.json` | MCP de investigación manual (F2): HIBP hosted + AbuseIPDB por `uvx` (la key sale del `.env` al lanzar; nada secreto commiteado). Solo para sesiones en esta carpeta — **nunca** en el cron |
@@ -201,7 +265,7 @@ venv/bin/separatio --report-only  # regenerar informe desde el caché del día
 venv/bin/separatio --last-run     # ¿cómo salió la última corrida? (F-H; --json = manifiesto crudo)
 venv/bin/separatio-check          # diagnóstico de entorno (carga el .env)
 venv/bin/ipcheck archivo.txt      # checker de IPs de consola (uso suelto preservado)
-venv/bin/pytest tests/ -q         # 228 tests, sin red
+venv/bin/pytest tests/ -q         # 339 tests, sin red
 sqlite3 data/archivo.db ".tables" # el store (F-B1); lo escribe cada pull desde F-B2
 python3 -m separatio.store.backfill --dry-run  # reconstruir el store desde by-date/ (F-B2)
 venv/bin/python -c "from separatio.lists import LocalLists; l=LocalLists.from_config(); l.load(); print(l.stats())"  # el filtro gratis (F-E)
@@ -227,11 +291,17 @@ desmontaron — las pruebas van en contenedores).
 
 ## Pendiente (en orden)
 
-0. ⚠️ **Commitear y desplegar F-A + F-H + F-I + F-B1 + F-B2 + F-E + F-C + F-D al CT 113** (2026-08-09):
-   ninguna de las ocho está commiteada todavía (protocolo del rework: commit no es automático, se
-   hace cuando el usuario lo pide — ver `docs/REWORK-ESTADO.md`). Una vez commiteadas y pusheadas, el
-   mismo `git pull` las lleva todas (F-B1/F-B2 piden además rehacer `pip install -e '.[dev]'` para
-   registrar `separatio.store`). El colector del CT corre cada 6 h con la versión **vieja** y sigue
+0. ⚠️ **Desplegar F-A + F-H + F-I + F-B1 + F-B2 + F-E + F-C + F-D + F-G al CT 113** (2026-08-09):
+   las ocho primeras **ya están commiteadas** en `412f268` (este archivo decía lo contrario hasta el
+   cierre de G-6; gana la máquina). Falta el push y el `git pull` en el CT. **Reinstalar
+   (`pip install -e '.[dev]'`) es obligatorio**: `separatio.store` (F-B1), `separatio.providers`
+   (F-G/G-5), y sobre todo F-G/G-6, que trae **dos dependencias nuevas** (`jinja2`, `markdown`) y
+   plantillas como *package-data* — sin reinstalar, el render del informe falla por plantilla no
+   encontrada. G-6 es además **el único cambio de esta tanda que se ve en el informe** (sublistas
+   anidadas, hard breaks, ~1 página menos de PDF): conviene mirar el primer PDF que salga en el CT.
+   G-2 no trae variables ni dependencias nuevas y no cambia conducta (los 97 valores efectivos son
+   idénticos), pero conviene comprobar en el CT que el primer `--dry-run` sigue escribiendo bajo
+   `reports/dryrun/` — es lo que ese ítem reimplementó. El colector del CT corre cada 6 h con la versión **vieja** y sigue
    metiendo la IP de casa como atacante; sin F-H el informe diario sigue sin manifiesto; sin F-I sigue
    sin declarar lo que le falta; sin F-B2 el store se queda vacío para siempre (nadie escribe); F-E,
    F-C y F-D no cambian conducta todavía (`honeypot_recon` sigue en OFF) pero conviene llevarlas igual

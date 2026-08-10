@@ -42,9 +42,11 @@ _CAP_DEFAULTS = {"trending_actors": 12, "trending_new_actors": 12,
                  "trending_cves": 10, "trending_deltas": 8}
 
 
-def _cap(name: str) -> int:
-    from separatio import config
-    caps = getattr(config, "PROMPT_CAPS", {}) or {}
+def _cap(name: str, caps: dict | None = None) -> int:
+    """El tope `name`, del `PROMPT_CAPS` que se pase o del global (F-G/G-2)."""
+    if caps is None:
+        from separatio import config
+        caps = getattr(config, "PROMPT_CAPS", {}) or {}
     return int(caps.get(name, _CAP_DEFAULTS[name]))
 
 
@@ -64,6 +66,9 @@ class TrendingContext:
     recurring_cves: dict[str, int] = field(default_factory=dict)
     # tipo -> delta % respecto a la media de la ventana (solo cambios ≥20%)
     threat_type_delta: dict[str, float] = field(default_factory=dict)
+    # Los topes de recorte del bloque (F-G/G-2): lo puebla `build_trending_context`
+    # desde el `Settings` que reciba. None → se leen del `config` global.
+    caps: dict | None = None
 
     def has_data(self) -> bool:
         return self.days_with_data > 0
@@ -78,27 +83,27 @@ class TrendingContext:
         ]
 
         if self.returning_actors:
-            n = _cap("trending_actors")
+            n = _cap("trending_actors", self.caps)
             top = sorted(self.returning_actors.items(), key=lambda x: -x[1])[:n]
             _drop("actores persistentes", len(top), len(self.returning_actors))
             actors_str = ", ".join(f"{a} ({d}d)" for a, d in top)
             lines.append(f"  Actores persistentes (activos en ≥2 días): {actors_str}")
 
         if self.new_actors:
-            n = _cap("trending_new_actors")
+            n = _cap("trending_new_actors", self.caps)
             _drop("actores nuevos", min(n, len(self.new_actors)), len(self.new_actors))
             lines.append(f"  Actores nuevos hoy (no vistos en {self.window_days} días): "
                          + ", ".join(self.new_actors[:n]))
 
         if self.recurring_cves:
-            n = _cap("trending_cves")
+            n = _cap("trending_cves", self.caps)
             top = sorted(self.recurring_cves.items(), key=lambda x: -x[1])[:n]
             _drop("CVEs recurrentes", len(top), len(self.recurring_cves))
             cves_str = ", ".join(f"{c} ({d}d)" for c, d in top)
             lines.append(f"  CVEs recurrentes (mencionados en ≥2 días): {cves_str}")
 
         if self.threat_type_delta:
-            n = _cap("trending_deltas")
+            n = _cap("trending_deltas", self.caps)
             changes = []
             for t, delta in sorted(self.threat_type_delta.items(), key=lambda x: -abs(x[1])):
                 arrow = "↑" if delta > 0 else "↓"
@@ -183,12 +188,17 @@ def build_trending_context(
     history: dict,
     today_str: str,
     window_days: int = 14,
+    settings=None,
 ) -> TrendingContext:
     """
     Calcula el contexto de trending a partir de la ventana de los últimos
     window_days días (sin incluir hoy, para comparar contra el pasado).
+
+    `settings` (un `Settings`, F-G/G-2) sólo se usa para los topes de recorte del
+    bloque de prompt; si no viene, se leen del `config` global como antes.
     """
-    ctx = TrendingContext(window_days=window_days, days_with_data=0)
+    ctx = TrendingContext(window_days=window_days, days_with_data=0,
+                          caps=(settings.PROMPT_CAPS if settings is not None else None))
 
     today = _parse_date(today_str)
     if today is None:

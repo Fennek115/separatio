@@ -116,6 +116,9 @@ class EnrichmentContext:
     notes: list[tuple[str, str]] = field(default_factory=list)
     sources_ok: list[str] = field(default_factory=list)
     sources_failed: list[str] = field(default_factory=list)
+    # Tope de veredictos por fuente que entran al prompt (F-G/G-2): lo puebla
+    # `run_enrichment` desde el `Settings` que reciba. None → del `config` global.
+    cap: int | None = None
 
     def add(self, verdict: IocVerdict) -> None:
         self.verdicts.append(verdict)
@@ -134,9 +137,10 @@ class EnrichmentContext:
 
         `cap` es el máximo de veredictos por fuente que entran al prompt: lo que
         exceda se registra como Drop y se declara en el bloque de cobertura.
-        None → el tope de `config.PROMPT_CAPS`, resuelto en cada llamada."""
+        None → el `cap` que traiga el contexto (lo pone `run_enrichment` desde el
+        `Settings`), y si tampoco lo hay, el de `config.PROMPT_CAPS`."""
         if cap is None:
-            cap = _default_cap()
+            cap = self.cap if self.cap is not None else _default_cap()
         if not self.verdicts and not self.notes:
             return ""
         lines: list[str] = []
@@ -213,10 +217,18 @@ class Enricher(ABC):
 def run_enrichment(
     summaries: list["ArticleSummary"],
     enrichers: list[Enricher],
+    settings=None,
 ) -> EnrichmentContext:
     """Ejecuta los enrichers habilitados sobre los IOCs de los resúmenes.
-    Cada enricher se aísla: su fallo se registra pero no detiene a los demás."""
+    Cada enricher se aísla: su fallo se registra pero no detiene a los demás.
+
+    `settings` (un `Settings`, F-G/G-2) sólo fija el tope de veredictos por
+    fuente que el contexto va a meter en el prompt; sin él se lee del `config`
+    global, como antes."""
     ctx = EnrichmentContext()
+    if settings is not None:
+        ctx.cap = int((settings.PROMPT_CAPS or {}).get("verdicts_per_source",
+                                                       DEFAULT_PROMPT_CAP))
     iocs = collect_iocs(summaries)
     if not iocs:
         logger.info("  Enrichment: no hay IOCs para enriquecer")

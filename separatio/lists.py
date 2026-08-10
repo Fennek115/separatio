@@ -188,14 +188,18 @@ class LocalLists:
         self._ipsum_scores: dict[int, int] = {}
 
     @classmethod
-    def from_config(cls, config=None) -> "LocalLists":
-        if config is None:
-            from separatio import config
+    def from_config(cls, settings=None) -> "LocalLists":
+        """Desde un `Settings` (F-G/G-2) o, si no viene, del `config` global.
+
+        (El parámetro se llamaba `config` y sombreaba al módulo que importaba
+        justo debajo.)"""
+        if settings is None:
+            from separatio import config as settings
         return cls(
-            sources=dict(getattr(config, "LOCAL_LISTS", {})),
-            cache_dir=getattr(config, "FEED_CACHE_DIR", "data/feeds"),
-            ttl_hours=float(getattr(config, "FEED_TTL_HOURS", 12)),
-            ipsum_min_score=int(getattr(config, "IPSUM_MIN_SCORE", 3)),
+            sources=dict(getattr(settings, "LOCAL_LISTS", {})),
+            cache_dir=getattr(settings, "FEED_CACHE_DIR", "data/feeds"),
+            ttl_hours=float(getattr(settings, "FEED_TTL_HOURS", 12)),
+            ipsum_min_score=int(getattr(settings, "IPSUM_MIN_SCORE", 3)),
         )
 
     def load(self, *, force: bool = False) -> None:

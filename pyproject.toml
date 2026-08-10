@@ -17,6 +17,8 @@ dependencies = [
     "anthropic>=0.40.0",
     "ollama>=0.3.0",        # legacy (PROVIDER = "ollama")
     "weasyprint>=62.0",     # export PDF; necesita pango/gdk-pixbuf del sistema
+    "jinja2>=3.1",          # plantillas del informe (F-G/G-6)
+    "markdown>=3.5",        # parser de Markdown del informe (F-G/G-6)
     # ipcheck
     "pandas>=2.0",
     "openpyxl>=3.1",
@@ -36,5 +38,8 @@ packages = ["separatio", "separatio.enrichers", "separatio.store", "separatio.pr
 
 # El DDL del store va como dato del paquete: `migrate()` lo lee de disco para
 # que el esquema se pueda leer y consultar sin abrir Python (F-B1).
+# Las plantillas del informe siguen el mismo criterio: son datos, no código,
+# y se editan sin tocar Python (F-G/G-6).
 [tool.setuptools.package-data]
 "separatio.store" = ["schema.sql"]
+"separatio" = ["templates/*.html.j2"]

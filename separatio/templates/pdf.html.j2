@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Threat Intelligence Briefing — {{ date }}</title>
+    <style>
+        /*
+         * Fuentes recomendadas en el servidor (LXC 112):
+         *   apt install fonts-ibm-plex
+         * Sin ellas usa Liberation Sans / DejaVu como fallback.
+         */
+        @page {
+            size: A4;
+            margin: 2.2cm 2.5cm 2cm 2.5cm;
+            @bottom-right {
+                content: "{{ report_id }}  ·  " counter(page) "/" counter(pages);
+                font-size: 7.5pt;
+                color: #9ca3af;
+                font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
+            }
+            @bottom-left {
+                content: "Threat Intelligence  ·  {{ date }}  ·  TLP:WHITE";
+                font-size: 7.5pt;
+                color: #9ca3af;
+                font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
+            }
+        }
+        @page:first {
+            @bottom-right { content: none; }
+            @bottom-left  { content: none; }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: "IBM Plex Sans", "Liberation Sans", "DejaVu Sans", sans-serif;
+            font-size: 10pt;
+            color: #111827;
+            line-height: 1.65;
+        }
+
+        /* ── Portada ── */
+        .cover {
+            padding-top: 7cm;
+            padding-bottom: 4cm;
+            page-break-after: always;
+        }
+        .cover-rule {
+            width: 2.8cm;
+            height: 4px;
+            background: #7c3aed;
+            margin-bottom: 1.4rem;
+        }
+        .cover-label {
+            font-size: 7pt;
+            font-weight: 700;
+            letter-spacing: 0.22em;
+            color: #7c3aed;
+            text-transform: uppercase;
+            margin-bottom: 0.7rem;
+        }
+        .cover h1 {
+            font-size: 27pt;
+            font-weight: 700;
+            color: #1e1b4b;
+            line-height: 1.12;
+            margin-bottom: 0.35rem;
+        }
+        .cover-date {
+            font-size: 13pt;
+            color: #4b5563;
+            margin-bottom: 3rem;
+        }
+        .cover-meta {
+            font-size: 8.5pt;
+            color: #6b7280;
+            border-top: 1px solid #e5e7eb;
+            padding-top: 0.9rem;
+            line-height: 2;
+        }
+        .cover-quote {
+            font-size: 8.5pt;
+            font-style: italic;
+            color: #5b21b6;
+            margin: 1.8rem 0 0.6rem;
+            padding-left: 0.9rem;
+            border-left: 2px solid #c4b5fd;
+            line-height: 1.55;
+        }
+        .cover-quote cite {
+            font-style: normal;
+            font-size: 7pt;
+            color: #9ca3af;
+            display: block;
+            margin-top: 0.3rem;
+            letter-spacing: 0.02em;
+        }
+        .cover-tlp {
+            display: inline-block;
+            border: 1px solid #c4b5fd;
+            color: #6d28d9;
+            font-size: 7pt;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            padding: 0.2em 0.65em;
+            border-radius: 2px;
+            margin-top: 1.6rem;
+        }
+
+        /* ── Encabezados ── */
+        h1 {
+            font-size: 15pt;
+            font-weight: 700;
+            color: #1e1b4b;
+            margin: 2rem 0 0.5rem;
+            padding-bottom: 0.4rem;
+            border-bottom: 2px solid #7c3aed;
+            page-break-after: avoid;
+        }
+        h2 {
+            font-size: 11pt;
+            font-weight: 600;
+            color: #1e1b4b;
+            margin: 1.4rem 0 0.4rem;
+            padding-left: 0.65rem;
+            border-left: 3px solid #7c3aed;
+            page-break-after: avoid;
+        }
+        h3 {
+            font-size: 10pt;
+            font-weight: 600;
+            color: #374151;
+            margin: 1rem 0 0.3rem;
+            page-break-after: avoid;
+        }
+        h4 {
+            font-size: 9.5pt;
+            font-weight: 600;
+            color: #4b5563;
+            margin: 0.7rem 0 0.2rem;
+        }
+
+        /* ── Cuerpo ── */
+        p  { margin-bottom: 0.55rem; }
+        ul, ol { padding-left: 1.3rem; margin-bottom: 0.6rem; }
+        li { margin-bottom: 0.25rem; }
+        strong { color: #111827; font-weight: 600; }
+        a  { color: #6d28d9; text-decoration: none; }
+        hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.3rem 0; }
+
+        /* ── Código ── */
+        code {
+            font-family: "IBM Plex Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
+            font-size: 8.5pt;
+            background: #f5f3ff;
+            border: 1px solid #ddd6fe;
+            border-radius: 3px;
+            padding: 0.05em 0.3em;
+            color: #4c1d95;
+        }
+        pre {
+            font-family: "IBM Plex Mono", "Liberation Mono", "DejaVu Sans Mono", monospace;
+            font-size: 8.5pt;
+            background: #faf5ff;
+            border: 1px solid #ddd6fe;
+            border-left: 3px solid #7c3aed;
+            border-radius: 3px;
+            padding: 0.8rem 1rem;
+            margin-bottom: 0.8rem;
+            page-break-inside: avoid;
+        }
+
+        /* ── Tablas ── */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 0.9rem;
+            font-size: 8.5pt;
+            table-layout: fixed;
+            word-break: break-word;
+        }
+        thead {
+            display: table-header-group;
+        }
+        tr {
+            page-break-inside: avoid;
+            page-break-after: auto;
+        }
+        th {
+            background: #1e1b4b;
+            color: #f5f3ff;
+            border: 1px solid #312e81;
+            padding: 0.45rem 0.65rem;
+            text-align: left;
+            font-weight: 600;
+            font-size: 7.5pt;
+            letter-spacing: 0.05em;
+            overflow-wrap: break-word;
+        }
+        td {
+            border: 1px solid #e5e7eb;
+            padding: 0.4rem 0.65rem;
+            vertical-align: top;
+            overflow-wrap: break-word;
+        }
+        tr:nth-child(even) td { background: #faf5ff; }
+        /* Tablas de muchas columnas (>6): reducir font y padding para que respire */
+        table.table-wide {
+            font-size: 7pt;
+        }
+        table.table-wide th,
+        table.table-wide td {
+            padding: 0.18rem 0.3rem;
+            letter-spacing: 0;
+        }
+
+        /* ── Cita ── */
+        blockquote {
+            border-left: 3px solid #c4b5fd;
+            padding-left: 0.8rem;
+            color: #6b7280;
+            font-style: italic;
+            margin-bottom: 0.6rem;
+        }
+        .section-break { page-break-before: always; }
+        .colophon {
+            margin-top: 3.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid #e5e7eb;
+            text-align: center;
+            font-size: 7.5pt;
+            font-style: italic;
+            color: #9ca3af;
+            letter-spacing: 0.04em;
+        }
+        .colophon-hash {
+            display: block;
+            margin-top: 0.5rem;
+            font-style: normal;
+            font-size: 6.5pt;
+            color: #d1d5db;
+            letter-spacing: 0.03em;
+            font-family: "IBM Plex Mono", "Liberation Mono", monospace;
+        }
+
+        /* ── Evitar títulos huérfanos al final de página ── */
+        h1 + p, h2 + p, h3 + p,
+        h1 + ul, h2 + ul, h3 + ul,
+        h1 + ol, h2 + ol, h3 + ol,
+        h1 + table, h2 + table, h3 + table,
+        h1 + blockquote, h2 + blockquote, h3 + blockquote {
+            break-before: avoid;
+        }
+
+        /* ── Tabla de Contenidos ── */
+        .toc {
+            page-break-after: always;
+            margin-top: 1rem;
+        }
+        .toc-title {
+            font-size: 14pt;
+            font-weight: 700;
+            color: #1e1b4b;
+            border-bottom: 2px solid #7c3aed;
+            padding-bottom: 0.4rem;
+            margin-bottom: 1.4rem;
+        }
+        .toc-list {
+            list-style: none;
+            padding-left: 0;
+            margin: 0;
+        }
+        .toc-list li {
+            margin-bottom: 0.12rem;
+        }
+        .toc-list li.toc-h1 {
+            font-size: 10pt;
+            font-weight: 600;
+            color: #1e1b4b;
+            margin-top: 0.5rem;
+        }
+        .toc-list li.toc-h2 {
+            padding-left: 1.4rem;
+            font-size: 9pt;
+            color: #4b5563;
+        }
+        .toc-link {
+            color: inherit;
+            text-decoration: none;
+            display: block;
+        }
+        .toc-link::after {
+            content: leader("·") " " target-counter(attr(href), page);
+            color: #9ca3af;
+            font-size: 8pt;
+            font-weight: normal;
+        }
+    </style>
+</head>
+<body>
+    <div class="cover">
+        <div class="cover-rule"></div>
+        <div class="cover-label">Daily Briefing</div>
+        <h1>Threat Intelligence<br>Report</h1>
+        <div class="cover-date">{{ date }}</div>
+        <div class="cover-quote">
+            "Separa la Tierra del Fuego, lo sutil de lo burdo,<br>pero s&eacute; prudente y circunspecto cuando lo hagas."
+            <cite>— Tabula Smaragdina, Hermes Trismegistus</cite>
+        </div>
+        <div class="cover-meta">
+            Generado: {{ generated_at }}<br>
+            Art&iacute;culos analizados: {{ total_articles }} &nbsp;&middot;&nbsp; Fuentes: {{ total_feeds }}<br>
+            An&aacute;lisis automatizado &nbsp;&middot;&nbsp; Threat Intelligence Pipeline<br>
+            ID: <strong>{{ report_id }}</strong><br>
+            <span style="font-family:'IBM Plex Mono','Liberation Mono',monospace;font-size:6.5pt;color:#9ca3af;letter-spacing:0.02em">SHA-256: {{ content_hash }}</span>
+        </div>
+        <div class="cover-tlp">TLP:WHITE</div>
+    </div>
+    {{ toc|safe }}
+    {{ body|safe }}
+    <div class="colophon">
+        "Lo que tuve que decir sobre el funcionamiento del Sol ha concluido."
+        &nbsp;&mdash;&nbsp; Tabula Smaragdina
+        <span class="colophon-hash">SHA-256: {{ content_hash }}</span>
+    </div>
+</body>
+</html>

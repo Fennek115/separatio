@@ -307,7 +307,7 @@ def _strip_llm_output(text: str) -> str:
     return text.strip()
 
 
-def _effort_for(phase: str, model: str) -> str | None:
+def _effort_for(phase: str, model: str, efforts: dict | None = None) -> str | None:
     """`output_config.effort` de la fase, o None si no corresponde.
 
     **Haiku 4.5 no acepta `effort`** (400): las fases latam/general y Stage 2
@@ -316,7 +316,9 @@ def _effort_for(phase: str, model: str) -> str | None:
     from separatio import config
     if "haiku" in (model or "").lower():
         return None
-    return (getattr(config, "PHASE_EFFORT", {}) or {}).get(phase)
+    if efforts is None:
+        efforts = getattr(config, "PHASE_EFFORT", {}) or {}
+    return (efforts or {}).get(phase)
 
 
 # Truncation signals per provider
@@ -1000,8 +1002,12 @@ def generate_phase_report(
     correlation=None,
     trending=None,
     enrichment=None,
+    settings=None,
 ) -> str:
-    """Genera el informe de una fase especializada (vuln / threat_intel / latam / general)."""
+    """Genera el informe de una fase especializada (vuln / threat_intel / latam / general).
+
+    `settings` (un `Settings`, F-G/G-2) sólo aporta `PHASE_EFFORT`; sin él se lee
+    del `config` global, como antes."""
     SYSTEMS = {
         "vulnerability": VULN_SYSTEM_PROMPT,
         "threat_intel":  THREAT_SYSTEM_PROMPT,
@@ -1068,7 +1074,8 @@ def generate_phase_report(
                 thinking=thinking,
                 num_ctx=num_ctx,
                 num_threads=num_threads,
-                effort=_effort_for(phase, model),
+                effort=_effort_for(phase, model,
+                                   settings.PHASE_EFFORT if settings is not None else None),
             )
             logger.info(f"  [{phase}] Generado ({provider})")
             return result
@@ -1090,6 +1097,7 @@ def generate_synthesis_report(
     num_threads: int = 0,
     max_tokens: int = 1500,
     provider: str = "ollama",
+    settings=None,
 ) -> str:
     """Stage 4: síntesis maestra cross-domain a partir de los outputs de las 4 fases."""
     prompt = build_synthesis_prompt(phase_outputs, date_str, total_articles, provider)
@@ -1107,7 +1115,8 @@ def generate_synthesis_report(
             thinking=thinking,
             num_ctx=num_ctx,
             num_threads=num_threads,
-            effort=_effort_for("synthesis", model),
+            effort=_effort_for("synthesis", model,
+                               settings.PHASE_EFFORT if settings is not None else None),
         )
         logger.info(f"  [synthesis] Generado ({provider})")
         return result

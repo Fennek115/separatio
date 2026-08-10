@@ -73,12 +73,14 @@ class LLMProvider(ABC):
         )
 
 
-def get_api_key(provider: str) -> str:
-    from separatio import config
+def get_api_key(provider: str, settings=None) -> str:
+    """La key del proveedor, de un `Settings` (F-G/G-2) o del `config` global."""
+    if settings is None:
+        from separatio import config as settings
     keys = {
-        "claude": getattr(config, "ANTHROPIC_API_KEY", ""),
-        "openai": getattr(config, "OPENAI_API_KEY", ""),
-        "gemini": getattr(config, "GEMINI_API_KEY", ""),
+        "claude": getattr(settings, "ANTHROPIC_API_KEY", ""),
+        "openai": getattr(settings, "OPENAI_API_KEY", ""),
+        "gemini": getattr(settings, "GEMINI_API_KEY", ""),
     }
     key = keys.get(provider, "")
     if not key:

@@ -280,13 +280,15 @@ class IpClassifier:
         return (UNKNOWN, None)
 
 
-def build_classifier(config=None) -> IpClassifier:
-    """Construye el clasificador desde `separatio.config` (o desde el entorno).
+def build_classifier(settings=None) -> IpClassifier:
+    """Construye el clasificador desde un `Settings` (o el módulo `config`).
 
-    Se lee del entorno como fallback para que el colector funcione aunque se lo
-    invoque fuera del paquete."""
+    Acepta cualquier objeto que responda a los nombres por `getattr` — desde
+    F-G/G-2 lo natural es un `separatio.settings.Settings`, pero el módulo
+    `config` sigue sirviendo. Sin nada, cae al entorno, para que el colector
+    funcione aunque se lo invoque fuera del paquete.""" 
     def cfg(name, default):
-        return getattr(config, name, default) if config is not None else default
+        return getattr(settings, name, default) if settings is not None else default
 
     own = own_ips_from_env()
     own += parse_ip_list(str(cfg("OWN_IPS", "")))

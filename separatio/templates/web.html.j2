@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Threat Intelligence Briefing — {{ date }}</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --muted: #8b949e;
+            --critical: #f85149;
+            --high: #ff7b72;
+            --medium: #d29922;
+            --low: #3fb950;
+            --accent: #58a6ff;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            padding: 2rem;
+            max-width: 960px;
+            margin: 0 auto;
+        }
+        h1 { font-size: 1.8rem; color: var(--accent); margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+        h2 { font-size: 1.25rem; color: var(--text); margin: 2rem 0 0.75rem; border-left: 3px solid var(--accent); padding-left: 0.75rem; }
+        h3 { font-size: 1rem; color: var(--muted); margin: 1rem 0 0.5rem; }
+        p  { margin-bottom: 0.75rem; color: var(--text); }
+        ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+        li { margin-bottom: 0.3rem; }
+        code {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.1em 0.4em;
+            font-family: "JetBrains Mono", "Fira Code", monospace;
+            font-size: 0.85em;
+            color: var(--medium);
+        }
+        pre {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            overflow-x: auto;
+            margin-bottom: 1rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1rem;
+        }
+        th {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            padding: 0.5rem 0.75rem;
+            text-align: left;
+            color: var(--muted);
+            font-weight: 600;
+        }
+        td {
+            border: 1px solid var(--border);
+            padding: 0.5rem 0.75rem;
+        }
+        blockquote {
+            border-left: 3px solid var(--border);
+            padding-left: 1rem;
+            color: var(--muted);
+            margin-bottom: 0.75rem;
+        }
+        .meta {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin-bottom: 2rem;
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.2em 0.6em;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-right: 0.3rem;
+        }
+        .critical { background: rgba(248,81,73,0.15); color: var(--critical); border: 1px solid var(--critical); }
+        .high     { background: rgba(255,123,114,0.15); color: var(--high); border: 1px solid var(--high); }
+        .medium   { background: rgba(210,153,34,0.15); color: var(--medium); border: 1px solid var(--medium); }
+        hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .footer { margin-top: 3rem; color: var(--muted); font-size: 0.8rem; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="meta">Generado el {{ generated_at }} · Pipeline de Threat Intelligence</div>
+    {{ body|safe }}
+    <div class="footer">
+        Informe generado automáticamente · {{ provider }} · {{ total_articles }} artículos de {{ total_feeds }} fuentes
+    </div>
+</body>
+</html>

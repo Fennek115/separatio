@@ -183,13 +183,28 @@ sistema en producción (cron 03:00) cuya verificación requiere Ollama/keys clou
   servidor) ejercitando `_llm_chat`/`generate_phase_report`/
   `generate_synthesis_report` de punta a punta.
 
-### 6.2 Reporter: plantillas + Markdown real  *(prioridad media)*
-- **Problema:** `reporter.py:93-524` tiene CSS/HTML como strings de Python y
-  `markdown_to_html_body` (`:527-652`) parsea Markdown con regex frágiles ante
+### 6.2 Reporter: plantillas + Markdown real  ✅ *hecho 2026-08-09 (F-G/G-6)*
+- **Problema:** `reporter.py:93-524` tenía CSS/HTML como strings de Python y
+  `markdown_to_html_body` (`:527-652`) parseaba Markdown con regex frágiles ante
   variaciones de salida del LLM.
-- **Propuesta:** mover plantillas a `templates/*.html.j2` (Jinja2) y reemplazar el
-  parser por la librería `markdown` (o `mistune`). Mantener el CSS de paginado A4.
-- **Verificación:** render de un informe de ejemplo fijo → comparar estructura HTML.
+- **Hecho**: plantillas en `separatio/templates/{pdf,web}.html.j2` (Jinja2,
+  como *package-data*) y el parser reemplazado por `markdown` (Python-Markdown)
+  con `tables`/`fenced_code`/`toc`. El CSS de paginado A4 se mantuvo intacto.
+  `reporter.py` 830 → 400 líneas. Dos concesiones al Markdown real del modelo
+  quedaron como extensión propia: un preprocessor que despega la tabla del
+  párrafo anterior (sin él se perdía una tabla del informe real) y el
+  treeprocessor que marca `table-wide`. El TOC se construye desde
+  `md.toc_tokens` con el `_slugify` propio inyectado, para que `id` y `href`
+  salgan del mismo motor — si se desincronizan, el índice del PDF se rompe en
+  silencio. As-built en [`fases/F-G.md`](fases/F-G.md).
+- **Verificación**: 43 tests nuevos (`reporter.py` no tenía ninguno), diff
+  estructural contra el informe real —tablas, encabezados, enlaces y código
+  idénticos; los únicos 113 tokens que cambian son marcadores de lista que el
+  parser viejo dejaba visibles como texto— y el PDF con weasyprint, con sus 25
+  entradas de índice y los números de página resueltos.
+- **Ojo**: este ítem **sí cambió la salida** (a diferencia del resto de F-G) y
+  sumó dos dependencias, `jinja2` + `markdown` (2,1 MB en disco, +13,3 MB de
+  RSS). Fue una decisión explícita del usuario.
 
 ### 6.3 Modularizar `pipeline.py`  ✅ *hecho 2026-08-09 (F-G/G-3)*
 - Extraer de `pipeline.py`: `dedup_by_cves`→`deduplicator.py`; `_detect_ioc_type`
@@ -200,10 +215,24 @@ sistema en producción (cron 03:00) cuya verificación requiere Ollama/keys clou
   funciones quedaron separadas y documentadas. 985 → 839 líneas. As-built en
   [`fases/F-G.md`](fases/F-G.md).
 
-### 6.4 Configuración inyectable  *(prioridad baja)*
-- Migrar `config.py` a `pydantic.BaseSettings` (o un dataclass `Settings`) e
-  inyectarlo en las firmas (`stage1_fetch(client, settings)`) en vez de importar
-  el módulo global. Habilita tests parametrizados y múltiples configs.
+### 6.4 Configuración inyectable  ✅ *hecho 2026-08-09 (F-G/G-2)*
+- **Hecho** con un dataclass congelado (`separatio/settings.py:Settings`), no con
+  pydantic: no hacía falta una dependencia nueva para esto. `Settings.from_env()`
+  lee el entorno (inyectable, así los tests no dependen de la máquina) y
+  `.derive(...)` produce variantes. Las etapas lo reciben por parámetro
+  (`stage1_fetch(client, limit, settings)`), como pedía el ítem.
+- `config.py` queda como **fachada** de 40 líneas sobre `Settings.from_env()`:
+  los 187 accesos `config.X` del repo y el `monkeypatch.setattr(config, ...)` de
+  los tests siguen funcionando sin tocarse. Los campos van en MAYÚSCULAS a
+  propósito — `hygiene` y `setup_check` leen la config por nombre dinámico.
+- **Lo que en realidad arregla**: `pipeline.py` *mutaba el módulo config en
+  caliente* para aislar el `--dry-run` y aplicar `--categories`. Ahora es
+  `settings_for(args)`, una función pura. Quedan cero asignaciones a `config.X`.
+- **Verificación**: los 97 valores idénticos (valor y tipo) contra el config
+  previo, 32 tests nuevos, y el aislamiento del dry-run comprobado en la máquina
+  (mtime y md5 de los artefactos reales intactos tras `--dry-run` y
+  `--dry-run --report-only`). Acoplamiento a `config`: 187 → 45 referencias.
+  As-built en [`fases/F-G.md`](fases/F-G.md).
 
 ### 6.5 Enriquecer el export de IOCs  ✅ *hecho 2026-08-09 (F-G/G-4)*
 - Hoy `export_iocs` corre antes de Stage 2.7. Reordenar (o re-exportar) para
