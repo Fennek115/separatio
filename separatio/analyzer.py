@@ -751,15 +751,47 @@ def _format_extras(s: ArticleSummary) -> str:
     return f"    {' | '.join(partes)}\n" if partes else ""
 
 
+# Registro del producto. El modelo escribe lo que se le da: si el prompt le habla
+# de "corridas" y "artículos procesados", el informe sale narrando la telemetría
+# del pipeline en vez del panorama de amenazas. Medido en la corrida del
+# 2026-08-10: «La corrida de hoy procesó 41 artículos…», «según la clasificación
+# provista», y —lo peor— «El equipo no encontró incidentes LATAM», que inventa un
+# sujeto colectivo que no existe.
+_DOCTRINE_RULE = (
+    "REGISTRO: escribís como analista de inteligencia de amenazas, no como una "
+    "herramienta narrando su propia ejecución.\n"
+    "(a) Nunca menciones el pipeline, la corrida, el caché, los prompts, los feeds "
+    "ni el conteo de artículos procesados. Decí «durante el período de reporte», no "
+    "«la corrida de hoy procesó N artículos». Los números de amenaza (cuántos CVEs, "
+    "qué distribución de severidad, cuántas víctimas) SÍ van: son sustancia, no "
+    "telemetría de la colección.\n"
+    "(b) No inventes un sujeto colectivo: no existe «el equipo» ni «nuestros "
+    "analistas». Usá voz impersonal: «no se identificó», «se observó».\n"
+    "(c) Usá lenguaje estimativo calibrado para lo que es inferencia y no hecho "
+    "observado: «es casi seguro» (>95%), «es muy probable» (80-95%), «es probable» "
+    "(55-80%), «es poco probable» (20-45%), «es muy improbable» (<20%). No inventes "
+    "porcentajes numéricos: usá la expresión, no la cifra.\n"
+    "(d) Distinguí CONFIANZA de PROBABILIDAD. La confianza (alta/media/baja) mide la "
+    "calidad y corroboración de las fuentes; la probabilidad mide qué tan factible es "
+    "el hecho. Son ejes independientes: se puede tener confianza alta en que algo es "
+    "poco probable. Cuando emitas un juicio que va más allá de lo reportado, marcá "
+    "ambos."
+)
+
 # Regla común a las cinco salidas: lo que el bloque COBERTURA declara como
 # faltante tiene que llegar al informe. Sin esto el modelo *sabe* lo que le falta
 # pero el lector no, que es exactamente el agujero que F-I viene a tapar.
+# El nombre de la sección es doctrina, no capricho: «brecha de colección» dice
+# que no se miró; «limitación» se lee como que se miró y no había nada.
 _LIMITS_RULE = (
-    "Si el bloque COBERTURA DE ESTA CORRIDA declara faltantes (una fuente caída u "
-    "omitida, artículos recortados o sólo-título), cerrá el informe con una línea "
-    "«**Limitaciones de esta corrida:** …» nombrándolos en una oración. Si no hay "
-    "faltantes declarados, omití esa línea por completo."
+    "Si el bloque COBERTURA Y BRECHAS DE COLECCIÓN declara faltantes (una fuente "
+    "caída u omitida, reporting recortado o sólo-título), cerrá el informe con una "
+    "línea «**Brechas de colección:** …» nombrándolos en una oración, en términos de "
+    "qué NO se pudo verificar —no de qué hizo la herramienta. Si no hay faltantes "
+    "declarados, omití esa línea por completo."
 )
+
+_STYLE_RULES = f"{_DOCTRINE_RULE}\n{_LIMITS_RULE}"
 
 
 def _context_blocks(correlation=None, trending=None, enrichment=None,
@@ -824,7 +856,7 @@ Genera el Vulnerability Briefing en español. Usa este formato exacto:
 (Lista ordenada por urgencia: sistema, CVE, razón específica de prioridad, [Fuente](URL).)
 
 REGLAS: No inventes CVEs ni datos. CVEs en KEV: señálalos explícitamente como confirmados. Usa las URLs exactas del campo URL de cada artículo.
-{_LIMITS_RULE}"""
+{_STYLE_RULES}"""
 
 
 def build_threat_prompt(summaries: list[ArticleSummary], date_str: str,
@@ -865,7 +897,7 @@ Genera el Threat Intelligence Digest en español. Usa este formato exacto:
 (5-7 acciones concretas para SOC/CERT: búsquedas SIEM sugeridas, bloqueos de IOCs, hunting queries basadas en TTPs observados)
 
 REGLAS: No inventes actores ni IOCs. Si hay actores persistentes en trending, señálalos. Incluye fuente para cada IOC.
-{_LIMITS_RULE}"""
+{_STYLE_RULES}"""
 
 
 def build_latam_prompt(summaries: list[ArticleSummary], date_str: str,
@@ -900,7 +932,7 @@ Genera el análisis regional en español. Usa este formato exacto:
 (3-5 acciones concretas considerando el contexto regulatorio local y el stack tecnológico predominante en la región)
 
 REGLAS: Sé específico sobre países cuando los datos lo permitan. No extrapoles incidentes globales a LATAM sin justificación. Si hay poco material LATAM directo, es válido indicarlo y enfocarse en las amenazas globales más relevantes para la región.
-{_LIMITS_RULE}"""
+{_STYLE_RULES}"""
 
 
 def build_general_prompt(summaries: list[ArticleSummary], date_str: str,
@@ -928,7 +960,7 @@ Genera el panorama general en español. Usa este formato exacto:
 (Patrones observados: cambios regulatorios, nuevas técnicas emergentes, movimientos del ecosistema relevantes)
 
 REGLAS: Prioriza noticias con impacto operacional directo sobre noticias corporativas. Sé conciso — este briefing es para dirección.
-{_LIMITS_RULE}"""
+{_STYLE_RULES}"""
 
 
 def build_synthesis_prompt(phase_outputs: dict[str, str], date_str: str,
@@ -958,7 +990,7 @@ def build_synthesis_prompt(phase_outputs: dict[str, str], date_str: str,
     cobertura = f"\n{cobertura}\n" if cobertura else ""
 
     return f"""Fecha: {date_str}
-Total artículos procesados: {total_articles}
+Volumen de reporting analizado (diagnóstico interno, NO citar en el informe): {total_articles}
 Fases completadas: {', '.join(phase_outputs.keys())}
 {cobertura}
 RESÚMENES ESPECIALIZADOS DE HOY:
@@ -972,6 +1004,13 @@ Genera el RESUMEN EJECUTIVO cross-domain en español. Usa este formato exacto:
 ## Nivel de Alerta: [CRÍTICO / ALTO / MEDIO / BAJO]
 (1 párrafo: justificación del nivel. El factor principal que determina la alerta de hoy.)
 
+## Juicios Clave
+(3-5 juicios numerados, cada uno en una o dos oraciones. Un juicio es una AFIRMACIÓN
+ANALÍTICA sobre lo que está pasando o va a pasar — no un resumen de una noticia.
+Cerrá cada uno con «(Confianza: alta/media/baja)» y usá lenguaje estimativo calibrado
+para la parte que sea inferencia. Si un juicio depende de una sola fuente sin
+corroborar, la confianza NO puede ser alta.)
+
 ## Prioridad #1 — Acción Inmediata
 (3-4 frases: la amenaza o vulnerabilidad más urgente del día. Qué hacer hoy, quién es responsable operacionalmente, cómo verificar que se ejecutó.)
 
@@ -982,7 +1021,7 @@ Genera el RESUMEN EJECUTIVO cross-domain en español. Usa este formato exacto:
 (1 párrafo para dirección/CISO: tendencia dominante, posicionamiento recomendado, qué vigilar en los próximos 7 días)
 
 REGLAS: NO repitas detalles de los análisis especializados — el lector los tiene disponibles. Enfócate en CONEXIONES y PANORAMA GLOBAL. Si no hay correlaciones claras, indícalo honestamente.
-{_LIMITS_RULE}"""
+{_STYLE_RULES}"""
 
 
 def generate_phase_report(

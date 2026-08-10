@@ -211,7 +211,7 @@ class Settings:
         "onion_lookup":   True,
         "honeypot":       False,   # F3: prender cuando el pull traiga dato real
         "malwarebazaar":  True,    # punto-5: ON (ABUSECH_API_KEY; no-op si falta)
-        "honeypot_recon": False,   # F-C: prender al verificar con tráfico real
+        "honeypot_recon": True,    # F-C: ON desde 2026-08-10 (hay tráfico real)
     })
 
     # NO usar levels/3.txt acá: verificado por HTTP en F-E (2026-08-09) que esos

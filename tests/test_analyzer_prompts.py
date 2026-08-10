@@ -21,6 +21,7 @@ from separatio.analyzer import (
     ArticleSummary,
     build_general_prompt,
     build_latam_prompt,
+    build_synthesis_prompt,
     build_threat_prompt,
     build_vuln_prompt,
 )
@@ -139,10 +140,38 @@ def test_el_bloque_llega_al_prompt_de_la_fase():
 
     prompt = build_vuln_prompt([_summary()], "2026-08-09")
 
-    assert "COBERTURA DE ESTA CORRIDA" in prompt
+    assert "COBERTURA Y BRECHAS DE COLECCIÓN" in prompt
     assert "OpenPhish" in prompt
     # Y el informe tiene que declararlo, no sólo saberlo.
-    assert "Limitaciones de esta corrida" in prompt
+    assert "Brechas de colección:" in prompt
+
+
+def test_el_registro_del_producto_va_en_las_cinco_salidas():
+    """El informe se escribe como inteligencia, no como telemetría del pipeline.
+
+    Lo pide la corrida del 2026-08-10, que salió narrando «La corrida de hoy
+    procesó 41 artículos» e inventando un «equipo» que no existe."""
+    prompts = [
+        build_vuln_prompt([_summary()], "2026-08-09"),
+        build_threat_prompt([_summary()], "2026-08-09"),
+        build_latam_prompt([_summary()], "2026-08-09"),
+        build_general_prompt([_summary()], "2026-08-09"),
+        build_synthesis_prompt({"vulnerability": "x"}, "2026-08-09", 10),
+    ]
+    for p in prompts:
+        assert "REGISTRO:" in p
+        assert "durante el período de reporte" in p
+        assert "no existe «el equipo»" in p
+        assert "es muy probable" in p          # lenguaje estimativo calibrado
+        assert "Distinguí CONFIANZA de PROBABILIDAD" in p
+
+
+def test_la_sintesis_pide_juicios_clave_con_confianza():
+    prompt = build_synthesis_prompt({"vulnerability": "x"}, "2026-08-09", 10)
+    assert "## Juicios Clave" in prompt
+    assert "Confianza: alta/media/baja" in prompt
+    # El conteo de artículos es diagnóstico, no material del informe.
+    assert "NO citar en el informe" in prompt
 
 
 # ── 2. Los topes ────────────────────────────────────────────

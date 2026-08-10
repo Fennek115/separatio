@@ -512,13 +512,15 @@ def coverage_block(phase: str | None = None) -> str:
         return ""
 
     return "\n".join([
-        "COBERTURA DE ESTA CORRIDA",
+        "COBERTURA Y BRECHAS DE COLECCIÓN",
         "(lo que este análisis SÍ y NO tiene — no afirmes con confianza sobre lo que falta):",
         *(f"  · {h}" for h in hechos),
         "",
         "REGLA: si una fuente falló o se omitió, NO afirmes ausencia de esa clase de "
         "amenaza — decí que no se pudo verificar. Si hubo recortes, no presentes el "
-        "listado como exhaustivo.",
+        "listado como exhaustivo. Este bloque es diagnóstico interno: traducilo a "
+        "brechas de colección en el informe, no cites sus números como si fueran "
+        "actividad de los atacantes.",
     ])
 
 
