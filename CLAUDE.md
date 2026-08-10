@@ -307,13 +307,21 @@ desmontaron — las pruebas van en contenedores).
 
 ## Pendiente (en orden)
 
-0. ⚠️ **`cowrie.json` crece sin tope y el colector lo lee entero.** Medido el 2026-08-10, a los 26
-   minutos de exponer el 22: **853 líneas, 9 IPs, ~26 MB/día**. No hay logrotate para Cowrie (sólo
-   para nginx), y `hp-readonly` hace `cat` del fichero completo en cada pull — cuatro veces al día,
-   y `consolidate()` lo parsea todo. En una semana son ~190 MB por pull. Arreglo del lado de acá:
-   que el colector pida sólo la cola (`tail`) en vez del fichero entero, lo que toca
-   `tools/pull_honeypot.sh` y el `hp-readonly` de las dos VMs. Del lado del honeypot va un
-   logrotate diario — detalle en `~/Projects/Motherbase/honeypot/EXPONER.md` §Pendientes.
+0. ~~⚠️ **`cowrie.json` crece sin tope y el colector lo lee entero.**~~ — **☑ resuelto el
+   2026-08-10, y el pendiente estaba mal en casi todo.** logrotate **no estaba instalado** en VM1
+   (los ficheros de `/etc/logrotate.d/` los dejaron otros paquetes): no rotaba nada. Y el arreglo
+   que este punto proponía —logrotate diario— se probó y **corrompía el log**: Cowrie cae en
+   `logtype = "plain"`, que es `open(path, "w")` sin `O_APPEND`, así que con `copytruncate` el fd
+   conserva el offset y deja un agujero de **998.071 bytes de NULs**. Quedó con la rotación nativa
+   (`logtype = rotating`, `CowrieDailyLogFile`, medianoche UTC) + un timer de retención a 14 días.
+   El crecimiento real remedido sobre 79 min sostenidos es **~18 MB/día**, no 26.
+
+   Lo que sí toca a este repo: rotar abría **un punto ciego diario de 2,5 h** —los pulls van a
+   03:30/09:30/15:30/21:30 UTC y la rotación a las 00:00, así que lo escrito entre el pull de las
+   21:30 y la medianoche no lo leía nadie—. Se arregló en el `hp-readonly` de synapse, que ahora
+   sirve **el rotado de ayer más el fichero vivo**; `pull_honeypot.sh` no cambió. La idea de pedir
+   sólo la cola queda descartada: con el log acotado a ≤48 h ya no hace falta. Detalle y
+   verificación en `~/Projects/Motherbase/honeypot/EXPONER.md` §La rotación de Cowrie.
 1. ⚠️ **Cerrar F-D contra dato real — se puede a partir del 2026-08-11.** Los honeypots se
    expusieron el 2026-08-10 y el store pasó de vacío a **28 IOCs / 75 observaciones / 2 payloads**
    en el primer pull. Lo único que falta para el criterio de cierre del rework es que **pase un
@@ -334,13 +342,25 @@ desmontaron — las pruebas van en contenedores).
    completa del pipeline** en el CT: estrena el manifiesto de F-H, las "Limitaciones" de F-I y el
    primer PDF con las plantillas de G-6 — el timer de las 07:04 la hace sola, y el informe crece
    ~9 % y cuesta ~$0,09 más por corrida.)*
-2. **CrowdSec en VM2** — decidido con el usuario el 2026-08-10, pendiente de ejecutar en su propia
-   sesión. En VM1 se quedó sin entrada útil al mudar el 22 a Cowrie (sólo parseaba el sshd real:
-   8.080 líneas de 11.300; de Cowrie y nginx no parsea nada). VM2 es hoy el único sitio con sshd
-   real recibiendo fuerza bruta. Detección pura, **sin bouncer**. Del lado de acá es una línea en
-   `tools/pull_honeypot.sh` para pedirle `cscli decisions` a ivory (el `hp-readonly` de allá ya
-   tiene el caso en la allowlist) y decidir si el `crowdsec: true/false` del atacante distingue por
-   sensor. Contexto en `~/Projects/Motherbase/honeypot/EXPONER.md` §CrowdSec.
+2. ~~**CrowdSec en VM2**~~ — **☑ hecho el 2026-08-10** (CrowdSec 1.7.8 en ivory, detección pura,
+   `cscli bouncers list` vacío y sin paquetes ni cadenas de bouncer). La premisa quedó **medida**:
+   desde el REDIRECT de las 11:33 UTC, el sshd real de VM1 lleva **0 fallos de auth** e ivory **65
+   desde 12 IPs** en la misma ventana de 72 min.
+
+   Del lado de este repo: `pull_honeypot.sh` le pide `cscli decisions list -o json` también a VM2
+   (a `raw/decisions_vm2.json`), y **el flag distingue por sensor** — se conserva `crowdsec`
+   (booleano, su único consumidor es el comentario del CSV de MISP) y se agrega
+   `crowdsec_sensors: ["vm1-crowdsec"|"vm2-crowdsec"]`. El sensor de CrowdSec **no** entra en
+   `sensors`: ese conjunto es "dónde la vimos pegar" y alimenta el cruce de "vista por >1 sensor";
+   una decisión es un juicio derivado del mismo sshd, no un avistamiento independiente. 7 tests
+   nuevos —los primeros que cubren este camino—, 348 pasan.
+
+   Verificado con una corrida real de `honeypot-pull.service`: `[pull] crowdsec: 1 IP(s) por
+   vm2-crowdsec`, y esa IP (`45.148.10.152`) es justo el caso que justifica el cambio — pegó a
+   **Cowrie en VM1** y está baneada por el **CrowdSec de VM2**, corroboración cruzada entre hosts.
+   Trampa a no repetir: `crowdsec -no-api` **no** desconecta del LAPI, así que una corrida one-shot
+   para medir empuja alertas reales con `created_at` de ahora. Medir con `cscli metrics` sobre el
+   servicio en vivo. Detalle en `~/Projects/Motherbase/honeypot/EXPONER.md` §CrowdSec.
 3. **Dos semanas de informes solos** (criterio de cierre de F0) — verificar cada tanto con
    `docs/DEPLOY.md` §4. Desde F-H eso se chequea con **`separatio --last-run`** (o
    `journalctl -u separatio.service`), no mirando si apareció el fichero. **Decidir si el CT 113

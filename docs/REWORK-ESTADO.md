@@ -361,3 +361,49 @@ filtran por tiempo, y ahí la fecha fija está bien.
 | F-G (G-6) | El mismo `git pull` **+ reinstalar obligatorio** (`venv/bin/pip install -e '.[dev]'`): hay **dos dependencias nuevas** (`jinja2`, `markdown` — 2,1 MB) y las plantillas van como *package-data*, así que sin reinstalar el render falla por plantilla no encontrada. Sin variables nuevas. **Es el único ítem de F-G que cambia lo que se ve**: el informe HTML/PDF sale distinto (sublistas anidadas de verdad, hard breaks respetados, ~1 página menos de PDF) — a mejor, pero conviene mirar el primer PDF del CT. RAM: +13,3 MB de RSS, pico de 34,3 MB contra el techo de 120 MB |
 
 </details>
+
+## Segundo sensor de CrowdSec y la rotación de Cowrie (2026-08-10)
+
+Sesión posterior a la exposición de los honeypots. Nada de esto es una fase del rework: es
+operación del sensor, pero cambia lo que el colector produce.
+
+**CrowdSec en VM2 (ivory).** 1.7.8, detección pura, sin bouncer. Se instaló porque al darle el 22 a
+Cowrie el CrowdSec de VM1 se quedó sin entrada — medido: desde el REDIRECT de las 11:33 UTC, VM1
+lleva **0 fallos de auth** en 72 min contra **65 desde 12 IPs** en ivory.
+
+**Lo que cambia en este repo** (commit `4c18ab9`, 348 tests):
+
+- `tools/pull_honeypot.sh` le pide `cscli decisions list -o json` también a VM2 →
+  `raw/decisions_vm2.json`. El `hp-readonly` de ivory ya tenía el caso en la allowlist (verificado
+  antes de tocar nada).
+- `honeypot_collector.py`: el flag **distingue por sensor**. Se conserva `crowdsec` (booleano; su
+  único consumidor es el comentario del CSV de MISP) y se agrega `crowdsec_sensors`, con la
+  convención que ya existía (`vm1-crowdsec` / `vm2-crowdsec`, junto a `vm1-cowrie` / `vm1-web` /
+  `vm2-services`). Las dos decisiones entran al snapshot por fecha.
+- **El sensor de CrowdSec no entra en `sensors`.** Ese conjunto es "dónde la vimos pegar" y alimenta
+  el cruce de "vista por >1 sensor"; una decisión es un juicio derivado del mismo sshd, no un
+  avistamiento independiente. Hay un test que fija justo eso.
+- Línea nueva en el resumen del pull: `[pull] crowdsec: N IP(s) por <sensor>`.
+
+**Verificado con corrida real** de `honeypot-pull.service`: `[pull] crowdsec: 1 IP(s) por
+vm2-crowdsec`, y la IP (`45.148.10.152`) es el caso que justifica el cambio — pegó a **Cowrie en
+VM1** y está baneada por el **CrowdSec de VM2**. Corroboración cruzada entre hosts, invisible con un
+booleano.
+
+**Punto ciego que se cerró.** Cowrie no rotaba (`logtype` sin definir → `open(path,"w")`); se puso
+la rotación nativa. Pero rotar a medianoche UTC dejaba **2,5 h diarias de Cowrie sin recolectar**,
+porque el pull de las 21:30 UTC es el último antes de la rotación y el siguiente lee un fichero que
+arranca a las 00:00. El `hp-readonly` de synapse ahora sirve **el rotado de ayer más el vivo**.
+`pull_honeypot.sh` no cambió, y la idea de "pedir sólo la cola" queda descartada: el log está
+acotado a ≤48 h.
+
+**Trampa cara, para no repetirla:** `crowdsec -no-api` **no** desconecta del LAPI, sólo evita
+levantar otro. Una corrida one-shot sobre el journal histórico —hecha para medir— empujó 38 alertas
+reales al LAPI con `created_at` de ahora. No llegó nada al store (ninguna coincidía con las IPs del
+honeypot) y caducaban en ~4 h, pero la medición correcta es `cscli metrics` sobre el servicio vivo.
+
+Y `pct resize 113 rootfs +4G`: el CT pasó de 4 a 8 G, en caliente. El corpus de payloads pasó de 2
+a 302 en una tarde.
+
+As-built completo, con las trampas y las verificaciones, en
+`~/Projects/Motherbase/honeypot/EXPONER.md` §CrowdSec y §La rotación de Cowrie.
