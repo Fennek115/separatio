@@ -410,8 +410,13 @@ tampoco estaba instalado en ivory). Pero acá `copytruncate` **sí** es seguro: 
 `copytruncate` no es seguro ni inseguro por sí mismo, depende de `O_APPEND`; se mira antes de
 escribir la config.
 
-Y `pct resize 113 rootfs +4G`: el CT pasó de 4 a 8 G, en caliente. El corpus de payloads pasó de 2
-a 302 en una tarde.
+Y `pct resize 113 rootfs +4G`: el CT pasó de 4 a 8 G, en caliente.
+
+**El corpus pasó de 2 a 302 payloads en una tarde, pero eso NO desbloquea F-F.** Verificado contra
+el store: los 302 son **cuerpos de peticiones a la API de Docker** de Beelzebub —droppers `wget|sh`
+en base64 apuntando a `5.182.210.174/ok`, inteligencia buena y real— pero **ninguno pasa de 705
+bytes**, y el único fichero que bajó Cowrie es una **clave pública RSA de 389 B** (persistencia en
+`authorized_keys`, no un binario). Para reglas YARA sigue faltando el segundo stage de verdad.
 
 As-built completo, con las trampas y las verificaciones, en
 `~/Projects/Motherbase/honeypot/EXPONER.md` §CrowdSec y §La rotación de Cowrie.
