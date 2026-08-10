@@ -31,19 +31,21 @@ fase en `docs/fases/`.
 **planificadas al detalle** (DDL, firmas, tests, comandos): una sesión ejecuta y documenta, no
 rediseña.
 
-Las dos que quedan están **bloqueadas por falta de tráfico del honeypot**, no por diseño:
+**Actualización del 2026-08-10 — el bloqueo por falta de tráfico se levantó.** Los honeypots se
+expusieron ese día (as-built en `~/Projects/Motherbase/honeypot/EXPONER.md`) y el store pasó de
+vacío a **28 IOCs / 75 observaciones / 2 payloads en el primer pull**:
 
-- **F-D** tiene código y tests cerrados, pero el **cierre real espera tráfico SSH repetido**: el
-  store de producción tiene 0 IPs con `days_seen >= 2` y 0 HASSH.
-- **F-F** (YARA) espera corpus: 0 payloads en disco.
+- **F-D** ya tiene dato. Lo único que falta es que **pase un segundo día**: `days_seen >= 2` está
+  en 0 por definición, no por falta de tráfico. Revisable desde el 2026-08-11.
+- **F-F** (YARA) ya no está en 0 payloads, pero 2 tampoco es corpus. Reevaluar en días.
 
-Así que la próxima sesión **no tiene fase que ejecutar** hasta que el honeypot vea tráfico.
-
-**El despliegue al CT 113 se hizo el 2026-08-10**: el CT pasó de `88dc851` a `dc5e850`, se
-reinstaló (`pip install -e '.[dev]'`, obligatorio por G-6), se agregó `OWN_IPS` a
-`/etc/intel/intel.env` y se corrió el backfill. Las nueve fases corren en producción; el as-built
-está en `docs/REWORK-ESTADO.md` §Despliegue. **Ese despliegue destapó un bug que sí hay que
-arreglar** (§Pendiente, punto 0): `pytest` escribe sus fixtures en el store de producción.
+**El despliegue al CT 113 se hizo el 2026-08-10**: el CT pasó de `88dc851` a `dc5e850` (y de ahí
+siguió), se reinstaló (`pip install -e '.[dev]'`, obligatorio por G-6), se agregó `OWN_IPS` a
+`/etc/intel/intel.env` y se corrió el backfill. Las nueve fases corren en producción. **El
+despliegue destapó cuatro bugs, los cuatro ya arreglados y desplegados** —`pytest` escribiendo en
+el store real, el `--dry-run` del backfill contando de más, `OUTPUT_FORMAT` que no se leía del
+entorno (por eso producción nunca generó un PDF), y un test con fecha fija que se rompía solo cada
+día—. As-built de todo en `docs/REWORK-ESTADO.md` §Despliegue y §Bugs.
 
 Primer ítem de F-G, **G-1 (partir `consolidate()`), cerrado 2026-08-09**: la función de 306 líneas
 que F-A había movido verbatim del heredoc se partió en cinco funciones de módulo —
@@ -305,7 +307,14 @@ desmontaron — las pruebas van en contenedores).
 
 ## Pendiente (en orden)
 
-0. ⚠️ **Cerrar F-D contra dato real — se puede a partir del 2026-08-11.** Los honeypots se
+0. ⚠️ **`cowrie.json` crece sin tope y el colector lo lee entero.** Medido el 2026-08-10, a los 26
+   minutos de exponer el 22: **853 líneas, 9 IPs, ~26 MB/día**. No hay logrotate para Cowrie (sólo
+   para nginx), y `hp-readonly` hace `cat` del fichero completo en cada pull — cuatro veces al día,
+   y `consolidate()` lo parsea todo. En una semana son ~190 MB por pull. Arreglo del lado de acá:
+   que el colector pida sólo la cola (`tail`) en vez del fichero entero, lo que toca
+   `tools/pull_honeypot.sh` y el `hp-readonly` de las dos VMs. Del lado del honeypot va un
+   logrotate diario — detalle en `~/Projects/Motherbase/honeypot/EXPONER.md` §Pendientes.
+1. ⚠️ **Cerrar F-D contra dato real — se puede a partir del 2026-08-11.** Los honeypots se
    expusieron el 2026-08-10 y el store pasó de vacío a **28 IOCs / 75 observaciones / 2 payloads**
    en el primer pull. Lo único que falta para el criterio de cierre del rework es que **pase un
    segundo día**: `days_seen >= 2` sigue en 0 por definición. Si una IP vuelve, F-D se cierra con
@@ -325,22 +334,24 @@ desmontaron — las pruebas van en contenedores).
    completa del pipeline** en el CT: estrena el manifiesto de F-H, las "Limitaciones" de F-I y el
    primer PDF con las plantillas de G-6 — el timer de las 07:04 la hace sola, y el informe crece
    ~9 % y cuesta ~$0,09 más por corrida.)*
-1. ⚠️ **`ANTHROPIC_API_KEY` definitiva** (la del CT es la temporal de prueba; el usuario decidió
-   esperar a que termine la etapa de pruebas). Cambiarla = editar una línea de
-   `/etc/intel/intel.env` en el CT 113.
-2. **Dos semanas de informes solos** (criterio de cierre de F0) — verificar cada tanto con
+2. **CrowdSec en VM2** — decidido con el usuario el 2026-08-10, pendiente de ejecutar en su propia
+   sesión. En VM1 se quedó sin entrada útil al mudar el 22 a Cowrie (sólo parseaba el sshd real:
+   8.080 líneas de 11.300; de Cowrie y nginx no parsea nada). VM2 es hoy el único sitio con sshd
+   real recibiendo fuerza bruta. Detección pura, **sin bouncer**. Del lado de acá es una línea en
+   `tools/pull_honeypot.sh` para pedirle `cscli decisions` a ivory (el `hp-readonly` de allá ya
+   tiene el caso en la allowlist) y decidir si el `crowdsec: true/false` del atacante distingue por
+   sensor. Contexto en `~/Projects/Motherbase/honeypot/EXPONER.md` §CrowdSec.
+3. **Dos semanas de informes solos** (criterio de cierre de F0) — verificar cada tanto con
    `docs/DEPLOY.md` §4. Desde F-H eso se chequea con **`separatio --last-run`** (o
-   `journalctl -u separatio.service`), no mirando si apareció el fichero. Decidir si el CT 113
-   entra en los jobs de backup (hoy no está).
+   `journalctl -u separatio.service`), no mirando si apareció el fichero. **Decidir si el CT 113
+   entra en los jobs de backup** (hoy no está) — pesa más desde el 2026-08-10: `data/archivo.db`
+   dejó de estar vacío.
 3. Decidir si se archiva `Fennek115/ip_threatcheck` en GitHub.
 4. **Prender `honeypot_recon` con GreyNoise real** (F-C, cuando el usuario lo pida): hoy queda
    construido, testeado y verificado con `LocalLists` real + GreyNoise mockeado a propósito — activar
    el toggle gasta cuota real (20/semana reservadas de las 25 medidas sin key).
-5. ⚠️ **Verificar F-D contra dato real, cuando el honeypot vea tráfico SSH repetido**: hoy el store
-   de producción tiene 0 IPs con `days_seen >= 2` y 0 HASSH (el sensor Cowrie no está expuesto). El
-   código y los 9 tests de `tests/test_store_queries.py` están hechos y pasan con datos sintéticos,
-   pero la fase no se declaró cerrada sin verlo andar con dato real — ver `docs/fases/F-D.md`
-   §Pendientes que deja.
+5. ~~Verificar F-D contra dato real~~ — **ya no está bloqueada**: los honeypots se expusieron
+   el 2026-08-10 y el store tiene dato real. Pasó al punto 1.
 6. Frente 2: OCR de imágenes en Stage 1–2 (idea AIOCRIOC, ~15 líneas con pytesseract;
    ver `docs/CAPAS-Y-FUENTES.md`). Recién después del deploy.
 7. Bugs menores conocidos: ~~enricher OpenPhish falla **a veces** con "Invalid IPv6 URL"~~ y
