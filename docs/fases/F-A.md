@@ -172,6 +172,59 @@ MB_CORPUS       /home/dust/Projects/Intel/data/honeypot/hashes.log
 OWN_IP_CACHE    /home/dust/Projects/Intel/data/own_ips.auto
 ```
 
+### As-built del despliegue al CT 113 (2026-08-10)
+
+`OWN_IPS` quedó en `/etc/intel/intel.env` (root:600, backup previo en
+`intel.env.bak-preF-A`), con las **dos** IPs propias del `.env` del laptop. El colector ya corre
+el código nuevo — salida literal de `systemctl start honeypot-pull.service`:
+
+```
+[pull] VM1 (Cowrie/Nginx/CrowdSec) desde ubuntu@… (ventana 24h)...
+[pull] VM2 (Beelzebub, servicios golosos) desde ubuntu@…
+[pull] higiene: 0 IP(s) propia(s) descartada(s) (0 hits) · 0 escáner(es) etiquetado(s)
+[pull] 0 IPs atacantes públicas (0 vistas por >1 sensor, 0 sin clasificar)
+[pull]   store: 0 IOCs nuevos, 0 observaciones nuevas, 0 payload(s) nuevo(s)
+Result=success · ExecMainStatus=0 · 1.236s CPU, 17.6M memory peak
+```
+
+La línea `[pull] higiene:` es la prueba de que F-A está activa; la línea `[pull] store:` lo es de
+F-B2. Los ceros son correctos: los honeypots **siguen sin exponer**, así que la ventana de 24 h no
+trajo un solo atacante (`"attackers": []` en los dos snapshots de `by-date/`).
+
+### ⚠️ Hallazgo del despliegue: `pytest` escribe en el store de producción
+
+**El paso de verificación que este mismo documento pedía —`venv/bin/pytest tests/ -q` dentro de
+`/opt/intel/app`— contaminó `data/archivo.db` con datos de fixture.** Se detectó porque el store del
+CT apareció con 3 IOCs y 3 observaciones cuando los dos snapshots de disco tienen `attackers: []`:
+
+```
+ioc: 162.142.125.7 (scanner/censys) · 45.9.148.99 (unknown) · 45.9.148.52 (unknown)
+observation: sensor 'vm1-web', service 'web', detail 'GET /.env'   ×3
+```
+
+Son literalmente las constantes de `tests/test_honeypot_collector.py` (`CENSYS`, `ATACANTE`,
+`PROPIA`). La causa: desde F-B2, `consolidate()` escribe al store con
+`store.db.store()` **sin parámetro de ruta**, así que resuelve al default
+`REPO_ROOT/data/archivo.db`; los tests le pasan un `out` en `tmp_path` pero **no redirigen el
+store**. Cada corrida de la suite acumula: el store del laptop tenía `times_seen` 50/57/42 y 150
+observaciones de fixture, más un `hassh` llamado `abc123`.
+
+**Consecuencia documental:** la verificación de F-C dice *"verificada con las 2 IPs candidatas
+reales del store (`45.9.148.99`, `45.9.148.52`)"* — **no son reales, son fixtures**. Lo mismo vale
+para cualquier conclusión sacada del store del laptop.
+
+Se corrigió el store del CT reconstruyéndolo desde disco (invariante 3), con backup en
+`data/archivo.db.bak-contaminado`:
+
+```
+$ rm data/archivo.db && python -m separatio.store.backfill
+backfill: 2 carpeta(s), 0 IOC(s) nuevo(s), 0 observación(es) nueva(s), 1 payload(s) nuevo(s)
+ioc 0 · observation 0 · payload 1 · enrichment 0 · meta schema_version=1
+```
+
+**El bug de código sigue abierto** (ver `../REWORK-ESTADO.md` §Bugs abiertos). Hasta que se
+arregle: **no correr `pytest` dentro de `/opt/intel/app`**.
+
 ## Ficheros
 
 **Nuevos:** `separatio/hygiene.py` · `separatio/honeypot_collector.py` · `tests/test_hygiene.py` ·
@@ -181,27 +234,11 @@ OWN_IP_CACHE    /home/dust/Projects/Intel/data/own_ips.auto
 
 ## Pendientes que deja
 
-### 1. Desplegar al CT 113 ⚠️
+### 1. Desplegar al CT 113 — ☑ **hecho el 2026-08-10** (ver as-built del despliegue, abajo)
 
-**El colector del CT sigue corriendo la versión vieja cada 6 h** (00/06/12/18:30) y va a seguir
-metiendo la IP de casa como atacante hasta que esto se haga:
-
-```bash
-# 1. commit + push desde el laptop (no se hizo: no está en el ritual automático)
-git add -A && git commit && git push           # → Fennek115/separatio
-
-# 2. traer el código y agregar la variable
-ssh proxmox 'pct exec 113 -- sudo -u intel git -C /opt/intel/app pull'
-ssh proxmox 'pct exec 113 -- bash -c "echo OWN_IPS=<las IPs propias> >> /etc/intel/intel.env"'
-
-# 3. verificar
-ssh proxmox 'pct exec 113 -- bash -c "cd /opt/intel/app && sudo -u intel venv/bin/pytest tests/ -q"'
-ssh proxmox 'pct exec 113 -- systemctl start honeypot-pull.service'
-ssh proxmox 'pct exec 113 -- journalctl -u honeypot-pull.service -n 20'   # buscar "[pull] higiene:"
-```
-
-Ojo con el paso 2: `honeypot-pull.service` corre con `User=intel` y `EnvironmentFile=`, así que
-`OWN_IPS` tiene que estar en `/etc/intel/intel.env`, no en un `.env` del clone (no hay).
+Ojo con el paso de la variable: `honeypot-pull.service` corre con `User=intel` y
+`EnvironmentFile=`, así que `OWN_IPS` tiene que estar en `/etc/intel/intel.env`, no en un `.env`
+del clone (no hay).
 
 ### 2. `data/honeypot/` local sigue sucio
 

@@ -259,13 +259,21 @@ def write_artifacts(raw, out, daydir, payload, events, payloads):
     return new_payloads
 
 
-def consolidate(raw: Path, out: Path, window: int, classifier=None) -> dict:
+def consolidate(raw: Path, out: Path, window: int, classifier=None,
+                db_path: str | Path | None = None) -> dict:
     """Lee raw/, escribe los artefactos en out/ y devuelve un resumen de la corrida.
 
     `classifier` es un `hygiene.IpClassifier`; si no se pasa se construye desde
     `separatio.config`. Las IPs propias se descartan (sólo se cuentan) y los
     escáneres de investigación se etiquetan pero no llegan a `iocs.csv` — ver
-    `docs/fases/F-A.md`."""
+    `docs/fases/F-A.md`.
+
+    `db_path` es la ruta del store; `None` usa la del `config`, que es lo que
+    hace el colector en producción. **Los tests tienen que pasarla** —`db.MEMORY`
+    o un fichero en `tmp_path`—: hasta el 2026-08-10 esta función abría el store
+    sin ruta y la suite escribía sus fixtures en el archivo real (ver
+    `docs/REWORK-ESTADO.md` §Bugs abiertos). `tests/conftest.py` lo cubre además
+    por default, para que un test nuevo no pueda reintroducir el fallo."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=window)
 
     if classifier is None:
@@ -379,7 +387,7 @@ def consolidate(raw: Path, out: Path, window: int, classifier=None) -> dict:
     try:
         from separatio.store.db import store as _store
         from separatio.store.ingest import ingest_run
-        with _store() as conn:
+        with _store(db_path) as conn:
             if conn is not None:
                 store_stats = ingest_run(conn, attackers=payload, events=events,
                                          hashes=None)

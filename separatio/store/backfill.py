@@ -15,20 +15,22 @@ laptop al store.
 Uso:
     python3 -m separatio.store.backfill                 # todo by-date/*/
     python3 -m separatio.store.backfill --since 2026-08-01
-    python3 -m separatio.store.backfill --dry-run        # cuenta sin escribir
+    python3 -m separatio.store.backfill --dry-run        # qué cambiaría, sin tocar el store
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 from separatio import config
 from separatio.hygiene import SELF, build_classifier
 from separatio.store import models
-from separatio.store.db import store
+from separatio.store.db import MEMORY, default_path, store
 from separatio.store.ingest import ingest_run
 
 TOTAL_KEYS = ("carpetas", "iocs_nuevos", "observaciones_nuevas", "payloads_nuevos")
@@ -92,7 +94,8 @@ def backfill(root: Path | str | None = None, *, since: str | None = None,
             dry_run: bool = False, classifier=None,
             db_path: str | Path | None = None) -> dict:
     """Recorre `by-date/*/` en orden y vuelca cada carpeta al store con
-    `ingest_run`. Devuelve los totales acumulados (estimados si `dry_run`)."""
+    `ingest_run`. Devuelve los totales acumulados; con `dry_run` son igual de
+    exactos, porque la ingesta corre contra una copia temporal del store."""
     root = Path(root) if root else Path(config.REPO_ROOT) / "data" / "honeypot" / "by-date"
     classifier = classifier or build_classifier(config)
     totals = {k: 0 for k in TOTAL_KEYS}
@@ -105,15 +108,29 @@ def backfill(root: Path | str | None = None, *, since: str | None = None,
         dirs = [p for p in dirs if p.name >= since]
 
     if dry_run:
-        for daydir in dirs:
-            att_path = daydir / "attackers.json"
-            if not att_path.exists():
-                continue
-            payload = _classify_attackers(json.loads(att_path.read_text()), classifier)
-            totals["carpetas"] += 1
-            totals["iocs_nuevos"] += len(payload.get("attackers", []))
-            totals["observaciones_nuevas"] += len(_read_events(daydir))
-        return totals
+        # Se ingiere **de verdad**, pero contra una copia temporal del store: los
+        # totales salen del mismo `ingest_run` que la corrida real, así que dicen
+        # exactamente qué cambiaría, y el fichero de producción no se toca.
+        #
+        # Antes esto contaba `len(attackers)` y `len(events)` sin comprobar si
+        # insertarían, y mentía: el 2026-08-10 anunció 2 observaciones donde la
+        # corrida real insertó 0, porque los eventos de Cowrie traen `ip: "?"` y
+        # no generan observación. Un dry-run que no predice no sirve.
+        origen = str(db_path) if db_path else default_path()
+        with tempfile.TemporaryDirectory(prefix="backfill-dryrun-") as tmp:
+            copia = str(Path(tmp) / "archivo.db")
+            if origen != MEMORY and Path(origen).is_file():
+                # `backup()` y no `copy2`: respeta el WAL, que puede tener commits
+                # que todavía no están en el fichero principal.
+                src = sqlite3.connect(origen)
+                dst = sqlite3.connect(copia)
+                try:
+                    with dst:
+                        src.backup(dst)
+                finally:
+                    src.close()
+                    dst.close()
+            return backfill(root, since=since, classifier=classifier, db_path=copia)
 
     with store(db_path, read_only=False) as conn:
         if conn is None:
@@ -148,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(description="Backfill del store desde by-date/")
     ap.add_argument("--since", default=None, help="YYYY-MM-DD: sólo carpetas desde acá")
-    ap.add_argument("--dry-run", action="store_true", help="cuenta sin escribir")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="ingiere contra una copia temporal y reporta el cambio real")
     args = ap.parse_args(argv)
 
     totals = backfill(since=args.since, dry_run=args.dry_run)

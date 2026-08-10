@@ -187,6 +187,32 @@ def test_backfill_es_idempotente(tmp_path):
     assert (n_ioc, n_obs) == (1, 1)
 
 
+def test_el_dry_run_predice_exacto_y_no_toca_el_store(tmp_path):
+    """El dry-run tiene que decir lo mismo que la corrida real, sin escribir.
+
+    Regresión del 2026-08-10: contaba `len(attackers)`/`len(events)` sin ver si
+    insertarían, y anunció 2 observaciones donde la corrida real insertó 0 (los
+    eventos de Cowrie traen `ip: "?"`). Ahora ingiere contra una copia temporal.
+    """
+    by_date = tmp_path / "by-date"
+    daydir = by_date / "2026-08-09"
+    daydir.mkdir(parents=True)
+    (daydir / "attackers.json").write_text(json.dumps(_attackers()))
+    # Un evento sin IP: exactamente el caso que el conteo viejo contaba de más.
+    (daydir / "events.jsonl").write_text(
+        json.dumps(_events()[0]) + "\n"
+        + json.dumps({"ts": DAY, "ip": "?", "sensor": "vm1-cowrie",
+                      "service": "ssh-download", "action": "malware sample"}) + "\n")
+
+    dbfile = tmp_path / "archivo.db"
+    seco = backfill_mod.backfill(root=by_date, classifier=_clf(),
+                                 dry_run=True, db_path=str(dbfile))
+    assert not dbfile.exists(), "el dry-run creó el store"
+
+    real = backfill_mod.backfill(root=by_date, classifier=_clf(), db_path=str(dbfile))
+    assert seco == real
+
+
 # ─────────────────────────────────────────────
 # el pull no depende del store
 # ─────────────────────────────────────────────

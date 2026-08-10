@@ -3,7 +3,7 @@
 > **Si estás empezando una sesión del rework, leé este archivo primero y nada más.**
 > Te dice en qué fase está, qué sigue, y qué archivo abrir para hacerlo.
 
-Última actualización: **2026-08-09** (cierre de **F-G completa** — G-2, configuración inyectable)
+Última actualización: **2026-08-10** (despliegue de las nueve fases al CT 113 — ver §Despliegue)
 
 Diseño y fundamentos: [`PLAN-REWORK.md`](PLAN-REWORK.md) (el *qué* y el *por qué*).
 Este archivo es el *cuándo* y el *cómo se ejecuta*.
@@ -71,15 +71,15 @@ real.
 
 | # | Fase | Qué es | Estado |
 |---|---|---|---|
-| — | **F-A** | [Higiene de la entrada](fases/F-A.md) | ☑ **Hecha el 2026-08-09** — clasificador `separatio/hygiene.py` (propias se descartan, escáneres se etiquetan por CIDR + PTR), consolidador extraído del heredoc a `separatio/honeypot_collector.py` y testeable, rutas de datos ancladas a `REPO_ROOT`. 73 tests. **Pendiente: desplegar al CT 113** |
-| — | **F-H** | [Observabilidad de la corrida](fases/F-H.md) | ☑ **Hecha el 2026-08-09** — `separatio/runlog.py` (manifiesto de la corrida), diez puntos de recorte instrumentados con `shown`/`total`, tokens a INFO, log con rotación, `status`/exit code y `separatio --last-run`. 94 tests. Verificada con corrida real: 5 llamadas, 52.897 in / 21.076 out. **Pendiente: desplegar al CT 113** |
-| — | **F-I** | [Afinado de prompts](fases/F-I.md) | ☑ **Hecha el 2026-08-09** — `runlog.coverage_block()` (el informe declara sus faltantes: 5 líneas "Limitaciones de esta corrida" contra 0 antes), topes a `config.PROMPT_CAPS` (IOCs 8→20, veredictos 25→60), **enrichment a las cuatro fases** (LATAM y general ya citan Ransomware.live/IPsum/ipcheck), campos `attack_techniques`/`exploitation_status`/`confidence` + técnicas ATT&CK corroboradas, salida estructurada en Stage 2 (0 reintentos) y `PHASE_EFFORT` cableado. 115 tests. A/B: **+$0,09 por corrida**. **Pendiente: desplegar al CT 113** |
-| — | **F-B1** | [Store: esquema y capa de acceso](fases/F-B1.md) | ☑ **Hecha el 2026-08-09** — paquete `separatio/store/` (`schema.sql` con 5 tablas + 5 índices, `db.py` con `open_store`/`migrate`/`store`, `models.py` con las 9 funciones de acceso), `data/archivo.db` creado en WAL con `schema_version=1`, migración idempotente y toggle `STORE_ENABLED`. 134 tests. El pipeline **no cambió de conducta**: nadie escribe el store todavía. **Pendiente: desplegar al CT 113** |
-| — | **F-B2** | [Ingesta idempotente y backfill](fases/F-B2.md) | ☑ **Hecha el 2026-08-09** — `separatio/store/ingest.py` (`ingest_run()`, punto único de escritura), `honeypot_collector.consolidate()` cablea la escritura envuelta en try/except, `separatio/store/backfill.py` (recorre `by-date/*/`, reclasifica snapshots anteriores a F-A). 146 tests. Verificado con IP sintética: reingerir la misma ventana deja `times_seen=1` y `count(*) observation` sin cambios. El único snapshot real (`2026-08-08/`) es la IP propia del laptop — el backfill la excluyó correctamente (0 IOCs). **Pendiente: desplegar al CT 113** |
-| — | **F-E** | [Listas locales](fases/F-E.md) | ☑ **Hecha el 2026-08-09** — `separatio/lists.py` (`LocalLists`: `array('I')` + bisect para IPs sueltas, rangos `(inicio,fin)` + bisect para CIDR), cache en `data/feeds/` con TTL de 12h y fail-open a copia vencida, `IPSUM_URL` corregido a la base (`levels/3.txt` no trae score, el plan lo asumía mal). 157 tests. Verificado con techo duro en el CT: **79,8 MB de pico** (techo 120 MB) tras corregir dos fugas de RAM que el plan no había previsto. **Pendiente: cablear en F-C y desplegar al CT 113** |
-| — | **F-C** | [Enricher inverso y triage](fases/F-C.md) | ☑ **Hecha el 2026-08-09** — `separatio/enrichers/honeypot_recon.py` (`HoneypotReconEnricher`): triage en 4 etapas (higiene → cache → listas locales de F-E → residuo), presupuesto declarativo (`config.QUOTAS`) contado contra el store, sólo el resultado NEGATIVO de GreyNoise escala a la cascada de `ipcheck`. 171 tests (14 nuevos). Verificado con datos reales del store (3 IOCs, 2 candidatas sin antecedentes) con GreyNoise mockeado a propósito (no gastar cuota real sin pedirlo) y `separatio --dry-run` intacto. **Pendiente: prender el toggle con GreyNoise real (gasta cuota, decisión del usuario) y desplegar al CT 113** |
-| — | **F-D** | [Reincidencia](fases/F-D.md) | ☑ **Código y tests hechos el 2026-08-09** — `separatio/store/queries.py` (`ip_recurrence`/`payload_history`/`hassh_fanout`/`top_recurrent`), `HoneypotReconEnricher` suma la reincidencia al `detail` de la señal fuerte y a tres notas nuevas, `config.RECURRENCE_WINDOW_DAYS`/`HASSH_MIN_IPS`/`HASSH_WINDOW_DAYS`. 180 tests (9 nuevos). **Cierre real bloqueado por tráfico SSH**: 0 IPs con `days_seen >= 2` y 0 HASSH en el store de producción — la verificación en vivo queda pendiente explícito, no se declaró hecha con datos sintéticos. **Pendiente: desplegar al CT 113** |
-| — | **F-F** | [YARA sobre el corpus](fases/F-F.md) | ☐ Bloqueada por corpus real (hoy 0 payloads en disco) |
+| — | **F-A** | [Higiene de la entrada](fases/F-A.md) | ☑ **Hecha el 2026-08-09** — clasificador `separatio/hygiene.py` (propias se descartan, escáneres se etiquetan por CIDR + PTR), consolidador extraído del heredoc a `separatio/honeypot_collector.py` y testeable, rutas de datos ancladas a `REPO_ROOT`. 73 tests. **☑ desplegada al CT 113 el 2026-08-10** |
+| — | **F-H** | [Observabilidad de la corrida](fases/F-H.md) | ☑ **Hecha el 2026-08-09** — `separatio/runlog.py` (manifiesto de la corrida), diez puntos de recorte instrumentados con `shown`/`total`, tokens a INFO, log con rotación, `status`/exit code y `separatio --last-run`. 94 tests. Verificada con corrida real: 5 llamadas, 52.897 in / 21.076 out. **☑ desplegada al CT 113 el 2026-08-10** |
+| — | **F-I** | [Afinado de prompts](fases/F-I.md) | ☑ **Hecha el 2026-08-09** — `runlog.coverage_block()` (el informe declara sus faltantes: 5 líneas "Limitaciones de esta corrida" contra 0 antes), topes a `config.PROMPT_CAPS` (IOCs 8→20, veredictos 25→60), **enrichment a las cuatro fases** (LATAM y general ya citan Ransomware.live/IPsum/ipcheck), campos `attack_techniques`/`exploitation_status`/`confidence` + técnicas ATT&CK corroboradas, salida estructurada en Stage 2 (0 reintentos) y `PHASE_EFFORT` cableado. 115 tests. A/B: **+$0,09 por corrida**. **☑ desplegada al CT 113 el 2026-08-10** |
+| — | **F-B1** | [Store: esquema y capa de acceso](fases/F-B1.md) | ☑ **Hecha el 2026-08-09** — paquete `separatio/store/` (`schema.sql` con 5 tablas + 5 índices, `db.py` con `open_store`/`migrate`/`store`, `models.py` con las 9 funciones de acceso), `data/archivo.db` creado en WAL con `schema_version=1`, migración idempotente y toggle `STORE_ENABLED`. 134 tests. El pipeline **no cambió de conducta**: nadie escribe el store todavía. **☑ desplegada al CT 113 el 2026-08-10** |
+| — | **F-B2** | [Ingesta idempotente y backfill](fases/F-B2.md) | ☑ **Hecha el 2026-08-09** — `separatio/store/ingest.py` (`ingest_run()`, punto único de escritura), `honeypot_collector.consolidate()` cablea la escritura envuelta en try/except, `separatio/store/backfill.py` (recorre `by-date/*/`, reclasifica snapshots anteriores a F-A). 146 tests. Verificado con IP sintética: reingerir la misma ventana deja `times_seen=1` y `count(*) observation` sin cambios. El único snapshot real (`2026-08-08/`) es la IP propia del laptop — el backfill la excluyó correctamente (0 IOCs). **☑ desplegada al CT 113 el 2026-08-10** |
+| — | **F-E** | [Listas locales](fases/F-E.md) | ☑ **Hecha el 2026-08-09** — `separatio/lists.py` (`LocalLists`: `array('I')` + bisect para IPs sueltas, rangos `(inicio,fin)` + bisect para CIDR), cache en `data/feeds/` con TTL de 12h y fail-open a copia vencida, `IPSUM_URL` corregido a la base (`levels/3.txt` no trae score, el plan lo asumía mal). 157 tests. Verificado con techo duro en el CT: **79,8 MB de pico** (techo 120 MB) tras corregir dos fugas de RAM que el plan no había previsto. Cableada por F-C. **☑ desplegada al CT 113 el 2026-08-10** |
+| — | **F-C** | [Enricher inverso y triage](fases/F-C.md) | ☑ **Hecha el 2026-08-09** — `separatio/enrichers/honeypot_recon.py` (`HoneypotReconEnricher`): triage en 4 etapas (higiene → cache → listas locales de F-E → residuo), presupuesto declarativo (`config.QUOTAS`) contado contra el store, sólo el resultado NEGATIVO de GreyNoise escala a la cascada de `ipcheck`. 171 tests (14 nuevos). Verificado con 3 IOCs / 2 candidatas del store y GreyNoise mockeado a propósito — **corrección del 2026-08-10: esos IOCs no eran reales, eran fixtures que `pytest` inyectó en el store** (ver §Bugs abiertos); el triage quedó ejercitado igual, pero no contra tráfico real (no gastar cuota real sin pedirlo) y `separatio --dry-run` intacto. **☑ desplegada al CT 113 el 2026-08-10.** Pendiente: prender el toggle con GreyNoise real (gasta cuota, decisión del usuario) |
+| — | **F-D** | [Reincidencia](fases/F-D.md) | ☑ **Código y tests hechos el 2026-08-09** — `separatio/store/queries.py` (`ip_recurrence`/`payload_history`/`hassh_fanout`/`top_recurrent`), `HoneypotReconEnricher` suma la reincidencia al `detail` de la señal fuerte y a tres notas nuevas, `config.RECURRENCE_WINDOW_DAYS`/`HASSH_MIN_IPS`/`HASSH_WINDOW_DAYS`. 180 tests (9 nuevos). **Cierre real bloqueado por tráfico SSH**: 0 IPs con `days_seen >= 2` y 0 HASSH en el store de producción — la verificación en vivo queda pendiente explícito, no se declaró hecha con datos sintéticos. **☑ desplegada al CT 113 el 2026-08-10** |
+| — | **F-F** | [YARA sobre el corpus](fases/F-F.md) | ☐ Bloqueada por corpus real (2026-08-10: **1 payload de 2 bytes** en el CT, de `vm1-cowrie` — no es corpus) |
 | **3** | **F-G** | [Deuda técnica](fases/F-G.md) | ☑ **HECHA el 2026-08-09 — los siete ítems (G-1…G-7) cerrados.** Era el único track sin dependencia de tráfico real, y se cerró entero en el día. **G-2 (el último)**: dataclass congelado `separatio/settings.py:Settings` + `config.py` como fachada de 40 líneas; las etapas de `pipeline.py` reciben `settings` por parámetro y **se eliminó la mutación global de `config` en caliente** de la que dependía el aislamiento del `--dry-run` (el fix del incidente del 2026-08-08) — ahora es `settings_for(args)`, función pura. Los 97 valores verificados idénticos (valor y tipo) contra el config previo; acoplamiento 187 → 45 referencias; 339 tests (32 nuevos). G-3: `pipeline.py` 985 → 839 líneas, tres módulos hoja nuevos (`deduplicator.py`, `ioc_processor.py`, `router.py`), 228 tests (45 nuevos — `pipeline.py` no tenía ninguno). G-5: paquete `separatio/providers/` (ABC `LLMProvider` + 4 subclases + fábrica) reemplaza el `if provider ==` de `_llm_chat` y el streaming de Ollama duplicado; `analyzer.py` 1241 → 1154 líneas, 264 tests (36 nuevos), verificado con una llamada real contra Claude. **G-6: el único ítem de F-G que cambió la salida a propósito** (decisión explícita del usuario, variante completa de §6.2) — plantillas a `separatio/templates/*.html.j2` (Jinja2) y parser de regex → librería `markdown`; `reporter.py` 830 → 400 líneas, 307 tests (43 nuevos — tampoco tenía ninguno), +2 dependencias (2,1 MB, +13,3 MB RSS) |
 
 ### Dependencias y orden
@@ -147,7 +147,7 @@ El orden no es decorativo:
   `noise=False` que exceden `RECON_MAX_ESCALATE` — se resolvió emitiéndoles igual el veredicto (sin
   el detalle de la cascada) en vez de perderlas en silencio, y `models.recent_ips` (F-B1) ganó dos
   columnas (`sensors`, `has_payload`) que el criterio de prioridad del residuo necesitaba y la
-  función original no traía. Verificada con las 2 IPs candidatas reales del store (`45.9.148.99`,
+  función original no traía. Verificada con las 2 IPs candidatas del store (**fixtures, no dato real** — §Bugs abiertos, 2026-08-10) (`45.9.148.99`,
   `45.9.148.52`) con GreyNoise **mockeado a propósito**: gastar la cuota real semanal es una
   decisión del usuario, no algo que una sesión de verificación tome sola.
 - **F-D (código y tests hechos el 2026-08-09) convierte dato en conocimiento — literalmente el
@@ -196,11 +196,136 @@ sus propios faltantes (F-I). Una afirmación que no se puede auditar no sirve co
 
 ---
 
-## Pendientes de despliegue acumulados
+## Despliegue al CT 113 — ☑ hecho el 2026-08-10
 
-Lo que está hecho en el repo pero **todavía no corre en el CT 113**:
+**Las nueve fases corren en producción.** El CT venía de `88dc851` (previo al rework) y pasó a
+`dc5e850` de un solo `git pull`. As-built:
 
-| De | Qué falta |
+```
+$ git -C /opt/intel/app pull --ff-only && git log --oneline -1
+dc5e850 rework F-G: cierre de la fase — reporter con plantillas (G-6) y config inyectable (G-2)
+
+$ venv/bin/pip install -e '.[dev]'
+Successfully installed MarkupSafe-3.0.3 intel-0.1.0 jinja2-3.1.6 markdown-3.10.3
+
+$ venv/bin/pytest tests/ -q
+339 passed in 5.22s          # ⚠️ este paso contamina el store — ver §Bugs abiertos
+
+$ systemctl start honeypot-pull.service
+[pull] higiene: 0 IP(s) propia(s) descartada(s) (0 hits) · 0 escáner(es) etiquetado(s)
+[pull]   store: 0 IOCs nuevos, 0 observaciones nuevas, 0 payload(s) nuevo(s)
+Result=success · ExecMainStatus=0
+
+$ separatio-check
+🎉 Todo listo.   (Miniflux OK, ANTHROPIC_API_KEY configurada, salida en /opt/intel/app/separatio/reports)
+
+$ separatio --last-run
+No hay manifiestos en /opt/intel/app/separatio/reports (ninguna corrida instrumentada todavía).
+```
+
+Lo que se hizo, en orden, y lo que hay que saber:
+
+| Paso | Resultado |
+|---|---|
+| `git pull` | `88dc851` → `dc5e850`. **Ojo:** hay que correrlo como `intel`; como root, git aborta con *dubious ownership* |
+| `pip install -e '.[dev]'` | obligatorio por G-6. Trajo `jinja2` 3.1.6, `markdown` 3.10.3, `MarkupSafe` 3.0.3 |
+| `OWN_IPS=` (F-A) | agregado a `/etc/intel/intel.env`, root:600, backup en `intel.env.bak-preF-A`. Las dos IPs propias, copiadas del `.env` del laptop |
+| backfill (F-B2) | `2 carpeta(s), 0 IOC(s), 0 observación(es), 1 payload(s)` |
+| G-6 (plantillas) | verificado **fuera** de `/opt/intel/app` para probar que resuelven como *package-data*: `pdf.html.j2` y `web.html.j2` presentes y compilan |
+| F-H (`--last-run`) | la CLI responde; el primer manifiesto lo escribe el timer diario de las 07:04 |
+
+**Rutas reales, contra lo que decían los documentos:** el venv es **`/opt/intel/app/venv`**, no
+`/opt/intel/venv`. Gana la máquina.
+
+**Los ceros del pull son correctos, no un fallo:** los honeypots siguen sin exponer, así que la
+ventana de 24 h no trajo ni un atacante (`"attackers": []` en los dos snapshots). El único dato del
+corpus es un payload de **2 bytes** de `vm1-cowrie` — por eso F-F sigue bloqueada aunque el conteo
+de payloads ya no sea literalmente 0.
+
+**Lo que todavía no se verificó en el CT** (cuesta plata, es decisión del usuario): una corrida
+completa del pipeline. Con eso se cierran las tres cosas que sólo se ven corriendo — el manifiesto
+de F-H, las "Limitaciones de esta corrida" de F-I, y **el primer PDF con las plantillas de G-6**
+(el único cambio de esta tanda que se ve en el informe). El timer diario lo hace solo a las 07:04.
+
+### Los informes se publican al share (2026-08-10)
+
+Pedido del usuario: poder leer los informes desde **copyparty**, como ya se hace con
+Kavita/Navidrome. Se siguió el patrón que ya usa el host: una carpeta del share montada en el CT.
+
+```
+host   /mnt/pve/nvme-data/cloud/Intel      (uid 100999:100991)
+CT 113 /mnt/informes                        (mp0, bind mount)
+CT 104 /media/storage/Intel                 (copyparty ya sirve /media/storage entero)
+```
+
+Salió gratis por una coincidencia que conviene no perder: **el usuario `intel` del CT 113 es
+uid 999 / gid 991**, los mismos que ya poseen las carpetas del share (`100999:100991` en el host,
+porque todos los CT son unprivileged). Cero idmap, igual que navidrome y kavita.
+
+Qué se publica y qué no: `/usr/local/bin/publicar-informes.sh` copia **sólo el PDF y el HTML** de
+cada carpeta con nombre de fecha, y corre como `ExecStartPost=-` (con guión: que fallar la copia no
+marque la corrida como fallida, invariante 1) de `separatio.service` y `separatio-weekly.service`.
+El directorio de trabajo sigue local, así que los dry-run, el caché de resúmenes y los
+`run-manifest.json` **no** llegan al share. El filtro es por forma del nombre (`^\d{4}-\d\d-\d\d$`),
+no por lista de exclusiones, para que no se pudra.
+
+Verificado: los dos informes que ya existían (`2026-08-08`, `2026-08-09`) quedaron publicados y se
+ven desde el CT de copyparty.
+
+### Bugs encontrados desplegando — ☑ los tres arreglados el 2026-08-10
+
+**1. `pytest` escribía en el store de producción.** Descubierto el 2026-08-10 desplegando. Desde
+F-B2, `honeypot_collector.consolidate()` abre el store con `store.db.store()` **sin ruta**, así que
+cae al default `REPO_ROOT/data/archivo.db`. Los tests de `test_honeypot_collector.py` y
+`test_store_ingest.py` le pasan un `out` en `tmp_path` pero **no redirigen el store**, así que cada
+corrida de la suite inyecta sus fixtures (`45.9.148.99`, `45.9.148.52`, `162.142.125.7`,
+`vm1-web`/`GET /.env`, un `hassh` `abc123`) en el archivo real y las acumula: el store del laptop
+llegó a `times_seen` 50/57/42 y **150 observaciones**, todas falsas.
+
+Impacto: contamina el dataset del que dependen F-C (triage) y F-D (reincidencia), y **puede hacer
+gastar cuota real de GreyNoise en IPs de fixture** cuando se prenda `honeypot_recon`. Además
+invalida una afirmación ya escrita: la verificación de F-C dice *"las 2 IPs candidatas **reales**
+del store"* y no lo son.
+
+**Arreglado**, en tres capas: `consolidate()` tomó un parámetro `db_path=None` que llega hasta
+`store()`; los tests que la llaman pasan `db.MEMORY`; y `tests/conftest.py` estrena un fixture
+`autouse` que manda el store por default a `tmp_path` —pisando **los dos** lados de la fachada de
+G-2, `config.STORE_PATH` y `config.SETTINGS`, porque `db.default_path()` acepta un `settings=` y
+resuelve por ahí cuando se lo pasan—, así que un test que se escriba mañana tampoco puede
+reintroducirlo. El store del CT se reconstruyó desde disco (backup en
+`data/archivo.db.bak-contaminado`) y quedó en `0 ioc / 0 observation / 1 payload`; el del laptop se
+sacó de en medio igual.
+
+Verificado en las dos direcciones: con el guard puesto, la suite pasa y `data/archivo.db` **no se
+crea**; sin el guard, el test de regresión nuevo (`test_la_suite_no_toca_el_store_del_repo`, que
+corre a propósito **sin** `db_path`) falla y el fichero aparece. 341 tests.
+
+**2. `backfill --dry-run` contaba de más.** Informaba `len(attackers)` y `len(events)` sin
+comprobar si insertarían: dijo `2 observaciones nuevas` donde el run real insertó `0`, porque los
+eventos de Cowrie traen `"ip": "?"` y no generan observación. Un dry-run que no predice no sirve.
+
+**Arreglado**: ahora ingiere de verdad, pero contra una **copia temporal** del store hecha con
+`sqlite3.Connection.backup()` (y no `copy2`, que se perdería los commits que estén sólo en el WAL),
+y devuelve los totales del mismo `ingest_run` que la corrida real. Test nuevo
+`test_el_dry_run_predice_exacto_y_no_toca_el_store`: el dry-run no crea el fichero y sus totales
+son **iguales** a los de la corrida real sobre el mismo `by-date/`.
+
+**3. El CT no generaba ningún PDF, y no se notaba.** Encontrado el 2026-08-10 al ir a publicar los
+informes. `weasyprint` estaba instalado como paquete Python pero **sin las librerías del sistema**
+(`libpango`), así que `import weasyprint` moría con `OSError`; `reporter._write_pdf` lo caza con un
+`except Exception` genérico, loguea "Error generando PDF" y devuelve `False`. Resultado: desde que
+el pipeline está en producción sólo salieron `.md` y `.html`, y nadie lo vio. **Es exactamente el
+patrón que ya había encontrado F-H** — "una fuente habilitada sin key no falla, se calla" — pero en
+la salida en vez de en la entrada.
+
+Arreglado instalando en el CT `libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfontconfig1
+libgdk-pixbuf-2.0-0 fonts-dejavu-core`. Verificado: `weasyprint 69.0` renderiza un PDF de 5.098
+bytes con cabecera `%PDF-`. El primer PDF real lo produce la corrida diaria.
+
+<details>
+<summary>Pendientes de despliegue acumulados (histórico — todos cerrados el 2026-08-10)</summary>
+
+| De | Qué faltaba |
 |---|---|
 | F-A | `git pull` en `/opt/intel/app` + agregar `OWN_IPS=` a `/etc/intel/intel.env`. Sin eso el pull de cada 6 h sigue metiendo la IP de casa como atacante. Comandos exactos en [`fases/F-A.md`](fases/F-A.md) §Pendientes |
 | F-H | El mismo `git pull` lo lleva. A partir de ahí `journalctl -u separatio.service` muestra el resumen de cada corrida y `separatio --last-run` funciona en el CT. Opcional: `OnFailure=` en la unit, ahora que el exit code significa algo |
@@ -214,3 +339,5 @@ Lo que está hecho en el repo pero **todavía no corre en el CT 113**:
 | F-G (G-5) | El mismo `git pull`, sin variables nuevas — pero esta vez **sí hay que reinstalar** (`venv/bin/pip install -e '.[dev]'`): `separatio.providers` es un subpaquete nuevo, mismo caso que F-B1 dejó anotado para `separatio.store`. No cambia la salida del pipeline (mismo dispatch, ahora por clases en vez de `if/elif`) |
 | F-G (G-2) | El mismo `git pull`, **sin variables nuevas y sin dependencias nuevas**. `separatio/settings.py` vive dentro del paquete `separatio`, que ya está registrado, así que no obliga a reinstalar por sí mismo (G-6 sí). No cambia la salida ni la conducta: los 97 valores efectivos son idénticos y `/etc/intel/intel.env` se sigue leyendo igual (`load_dotenv` → `Settings.from_env()` al importar `config`). Lo único que conviene mirar en el CT es que el primer `--dry-run` siga escribiendo bajo `reports/dryrun/` |
 | F-G (G-6) | El mismo `git pull` **+ reinstalar obligatorio** (`venv/bin/pip install -e '.[dev]'`): hay **dos dependencias nuevas** (`jinja2`, `markdown` — 2,1 MB) y las plantillas van como *package-data*, así que sin reinstalar el render falla por plantilla no encontrada. Sin variables nuevas. **Es el único ítem de F-G que cambia lo que se ve**: el informe HTML/PDF sale distinto (sublistas anidadas de verdad, hard breaks respetados, ~1 página menos de PDF) — a mejor, pero conviene mirar el primer PDF del CT. RAM: +13,3 MB de RSS, pico de 34,3 MB contra el techo de 120 MB |
+
+</details>

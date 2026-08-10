@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from separatio.honeypot_collector import consolidate
 from separatio.hygiene import IpClassifier
+from separatio.store import db
 
 # Fixtures. Tienen que ser IPs GLOBALES: los rangos de documentación
 # (198.51.100.0/24, 203.0.113.0/24) no pasan el filtro `public()`, que corre
@@ -46,7 +47,10 @@ def _clf():
 def _run(tmp_path, **kw):
     raw = kw.pop("raw", None) or _raw(tmp_path)
     out = tmp_path / "out"
-    return consolidate(raw, out, 24, classifier=kw.pop("classifier", None) or _clf()), out
+    # `db_path` explícito: sin él `consolidate()` resuelve al store del repo y la
+    # suite escribe sus fixtures en producción — el bug del 2026-08-10.
+    return consolidate(raw, out, 24, db_path=db.MEMORY,
+                       classifier=kw.pop("classifier", None) or _clf()), out
 
 
 # ── el criterio de hecho de F-A ─────────────────────────────
@@ -117,8 +121,8 @@ def test_reingerir_el_mismo_dia_no_duplica(tmp_path):
     """El pull corre cada 6 h: reconsolidar la misma ventana da lo mismo."""
     raw = _raw(tmp_path)
     out = tmp_path / "out"
-    primera = consolidate(raw, out, 24, classifier=_clf())
-    segunda = consolidate(raw, out, 24, classifier=_clf())
+    primera = consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+    segunda = consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
     assert [a["ip"] for a in primera["attackers"]] == [a["ip"] for a in segunda["attackers"]]
     assert len(primera["events"]) == len(segunda["events"])
     escrito = json.loads((out / "attackers.json").read_text())
@@ -138,3 +142,25 @@ def test_raw_vacio_no_rompe(tmp_path):
     r, out = _run(tmp_path, raw=raw)
     assert r["attackers"] == []
     assert json.loads((out / "attackers.json").read_text())["attackers"] == []
+
+
+def test_la_suite_no_toca_el_store_del_repo(tmp_path):
+    """Regresión del 2026-08-10: correr la suite escribía en producción.
+
+    `consolidate()` abría el store sin ruta y caía en `REPO_ROOT/data/archivo.db`,
+    así que cada corrida de pytest metía a PROPIA/CENSYS/ATACANTE en el archivo
+    real. Este test corre **a propósito sin `db_path`** —el camino que fallaba— y
+    comprueba que el fichero del repo no se crea ni se modifica; lo garantiza el
+    `conftest.py`, que manda el default a `tmp_path`.
+    """
+    from pathlib import Path
+
+    from separatio import config
+
+    real = Path(config.REPO_ROOT) / "data" / "archivo.db"
+    antes = real.stat().st_mtime_ns if real.exists() else None
+
+    consolidate(_raw(tmp_path), tmp_path / "out", 24, classifier=_clf())
+
+    despues = real.stat().st_mtime_ns if real.exists() else None
+    assert antes == despues, f"la suite escribió en el store real: {real}"

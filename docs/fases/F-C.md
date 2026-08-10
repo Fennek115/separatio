@@ -272,9 +272,15 @@ el recorte queda registrado con `runlog.record_drop("enrichers.honeypot_recon.ca
 con el resto del repo — no cambia lo que fijan). Suite completa: **171 tests** (157 + 14),
 `venv/bin/pytest tests/ -q` verde.
 
-**Verificado con datos reales del store** (`data/archivo.db`, cargado por el colector antes de esta
-sesión): 3 IOCs — `162.142.125.7` (Censys, `klass=scanner`) y dos IPs `unknown`
-(`45.9.148.99`, `45.9.148.52`). Corrida real (`LocalLists` real, 1,08 M de IPs cargadas y sin
+**Verificado contra el store** (`data/archivo.db`): 3 IOCs — `162.142.125.7` (Censys,
+`klass=scanner`) y dos IPs `unknown` (`45.9.148.99`, `45.9.148.52`).
+
+> ⚠️ **Corrección del 2026-08-10.** Esta sesión dio esos 3 IOCs por "datos reales cargados por el
+> colector". **No lo eran: son las fixtures de `tests/test_honeypot_collector.py`**, que `pytest`
+> inyecta en el store por default cada vez que corre la suite (bug abierto, ver
+> [`../REWORK-ESTADO.md`](../REWORK-ESTADO.md) §Bugs abiertos). El triage quedó igualmente
+> ejercitado de punta a punta —las cuatro etapas, `LocalLists` real y el presupuesto contra el
+> store—, pero **F-C no está verificada contra tráfico real de honeypot**, igual que F-D. Corrida real (`LocalLists` real, 1,08 M de IPs cargadas y sin
 coincidencias para ninguna de las dos), con `_check_greynoise`/`_cascade` **mockeados a propósito**
 —no se gastó cuota real de GreyNoise sin confirmación explícita del usuario—, ejecutada sobre una
 conexión sin commit (no se escribió nada en el store real: verificado con

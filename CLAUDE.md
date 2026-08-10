@@ -37,9 +37,13 @@ Las dos que quedan están **bloqueadas por falta de tráfico del honeypot**, no 
   store de producción tiene 0 IPs con `days_seen >= 2` y 0 HASSH.
 - **F-F** (YARA) espera corpus: 0 payloads en disco.
 
-Así que la próxima sesión **no tiene fase que ejecutar** hasta que el honeypot vea tráfico. Lo que
-sí hay pendiente y no depende de eso es **el despliegue al CT 113** (ver §Pendiente, punto 0):
-nueve fases hechas en el repo y ninguna corriendo todavía en producción.
+Así que la próxima sesión **no tiene fase que ejecutar** hasta que el honeypot vea tráfico.
+
+**El despliegue al CT 113 se hizo el 2026-08-10**: el CT pasó de `88dc851` a `dc5e850`, se
+reinstaló (`pip install -e '.[dev]'`, obligatorio por G-6), se agregó `OWN_IPS` a
+`/etc/intel/intel.env` y se corrió el backfill. Las nueve fases corren en producción; el as-built
+está en `docs/REWORK-ESTADO.md` §Despliegue. **Ese despliegue destapó un bug que sí hay que
+arreglar** (§Pendiente, punto 0): `pytest` escribe sus fixtures en el store de producción.
 
 Primer ítem de F-G, **G-1 (partir `consolidate()`), cerrado 2026-08-09**: la función de 306 líneas
 que F-A había movido verbatim del heredoc se partió en cinco funciones de módulo —
@@ -286,30 +290,41 @@ anteriores a `7b675cf` con `--dry-run` un día que ya tuvo corrida real.**
 diario 07:00 y semanal lunes 08:00, ambos `Persistent=true`. Código en `/opt/intel/app`
 (clone del repo público), secretos en `/etc/intel/intel.env` root:600, corre como usuario de
 sistema `intel`. As-built completo, operación y pendientes del deploy en `docs/DEPLOY.md`.
+
+**Los informes se publican al share (2026-08-10).** El CT 113 tiene `mp0` bind-mounteado a
+`/mnt/pve/nvme-data/cloud/Intel` del host en `/mnt/informes`, y un `ExecStartPost=-` en
+`separatio.service` / `separatio-weekly.service` corre `/usr/local/bin/publicar-informes.sh`, que
+copia ahí **sólo el PDF y el HTML** de cada carpeta de fecha. Copyparty (CT 104) ya sirve
+`/media/storage` entero, así que aparecen solos en `/Intel/<fecha>/`. El directorio de trabajo
+sigue local: los dry-run, el caché y los manifiestos no llegan al share. Y ojo, dato que costó
+encontrar: **hasta el 2026-08-10 el CT no generaba ningún PDF** — `weasyprint` estaba instalado
+pero sin `libpango`, y `_write_pdf` se comía el `OSError` con un `except Exception`. Ya están las
+librerías del sistema puestas.
 En el laptop **no queda nada** corriendo (hubo timers de usuario unas horas ese día; se
 desmontaron — las pruebas van en contenedores).
 
 ## Pendiente (en orden)
 
-0. ⚠️ **Desplegar F-A + F-H + F-I + F-B1 + F-B2 + F-E + F-C + F-D + F-G al CT 113** (2026-08-09):
-   las ocho primeras **ya están commiteadas** en `412f268` (este archivo decía lo contrario hasta el
-   cierre de G-6; gana la máquina). Falta el push y el `git pull` en el CT. **Reinstalar
-   (`pip install -e '.[dev]'`) es obligatorio**: `separatio.store` (F-B1), `separatio.providers`
-   (F-G/G-5), y sobre todo F-G/G-6, que trae **dos dependencias nuevas** (`jinja2`, `markdown`) y
-   plantillas como *package-data* — sin reinstalar, el render del informe falla por plantilla no
-   encontrada. G-6 es además **el único cambio de esta tanda que se ve en el informe** (sublistas
-   anidadas, hard breaks, ~1 página menos de PDF): conviene mirar el primer PDF que salga en el CT.
-   G-2 no trae variables ni dependencias nuevas y no cambia conducta (los 97 valores efectivos son
-   idénticos), pero conviene comprobar en el CT que el primer `--dry-run` sigue escribiendo bajo
-   `reports/dryrun/` — es lo que ese ítem reimplementó. El colector del CT corre cada 6 h con la versión **vieja** y sigue
-   metiendo la IP de casa como atacante; sin F-H el informe diario sigue sin manifiesto; sin F-I sigue
-   sin declarar lo que le falta; sin F-B2 el store se queda vacío para siempre (nadie escribe); F-E,
-   F-C y F-D no cambian conducta todavía (`honeypot_recon` sigue en OFF) pero conviene llevarlas igual
-   para no ir dejando deploys pendientes acumulados. Falta commit+push, `git pull` en `/opt/intel/app`,
-   agregar `OWN_IPS=` a `/etc/intel/intel.env` (ninguna de estas ocho trae variables nuevas
-   obligatorias) y correr `python3 -m separatio.store.backfill` una vez ahí para no perder lo que ya
-   haya en `by-date/`. Comandos exactos en `docs/fases/F-A.md` §Pendientes. Después de F-I el informe
-   del CT crece ~9 % y cuesta ~$0,09 más por corrida.
+0. ⚠️ **Exponer los honeypots — es lo único que separa al proyecto de estar cerrado.** Los
+   servicios ya corren en las dos VMs; lo que bloquea es el `iptables` del OS (INPUT sólo deja el
+   22) y, para los puertos nuevos, la Security List de OCI. Decidido con el usuario el 2026-08-10:
+   en **VM1 (synapse)** el sshd admin se muda a un puerto alto y el **22 se le da a Cowrie por
+   DNAT** —ahí está el tráfico de fuerza bruta que hoy va al sshd real y se tira, que es justo lo
+   que F-D necesita—, más 2223 y 80/443; en **VM2 (ivory)** se abren los seis de Beelzebub (6379,
+   3306, 5432, 5900, 9200, 2375). Ojo con dos cosas: **hay una sola Security List para las dos
+   VMs** (el control fino es el iptables de cada una), y mover el sshd obliga a reapuntar el
+   colector del CT 113 (`hp-pull`) al puerto nuevo. Hacerlo con sesión abierta y verificando desde
+   otra terminal, según la regla del proyecto madre. Reglas de ingress ya calculadas.
+
+   *(Lo de esta tanda que ya está hecho, 2026-08-10: el despliegue de las nueve fases —CT en
+   `dc5e850`, reinstalado, `OWN_IPS` puesta, backfill corrido, `honeypot-pull.service` verificado
+   con `[pull] higiene:` y `[pull] store:`—; los **tres bugs** que el despliegue destapó
+   —`pytest` escribiendo en el store real, el `--dry-run` del backfill contando de más, y el CT sin
+   generar PDF por falta de `libpango`—; y la **publicación de los informes al share** que sirve
+   copyparty. As-built de todo en `docs/REWORK-ESTADO.md` §Despliegue. Falta ver una **corrida
+   completa del pipeline** en el CT: estrena el manifiesto de F-H, las "Limitaciones" de F-I y el
+   primer PDF con las plantillas de G-6 — el timer de las 07:04 la hace sola, y el informe crece
+   ~9 % y cuesta ~$0,09 más por corrida.)*
 1. ⚠️ **`ANTHROPIC_API_KEY` definitiva** (la del CT es la temporal de prueba; el usuario decidió
    esperar a que termine la etapa de pruebas). Cambiarla = editar una línea de
    `/etc/intel/intel.env` en el CT 113.
