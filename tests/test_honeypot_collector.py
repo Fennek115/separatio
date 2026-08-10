@@ -129,6 +129,84 @@ def test_reingerir_el_mismo_dia_no_duplica(tmp_path):
     assert len(escrito["attackers"]) == 2
 
 
+# ── CrowdSec: dos sensores, y hay que saber cuál habló ──────
+
+def _decisiones(*ips):
+    """Una salida de `cscli decisions list -o json` con una alerta por IP."""
+    return json.dumps([{"decisions": [{"value": ip, "type": "ban",
+                                       "scenario": "crowdsecurity/ssh-bf",
+                                       "scope": "Ip"}]} for ip in ips])
+
+
+def test_la_decision_de_vm2_atribuye_el_sensor(tmp_path):
+    raw = _raw(tmp_path)
+    (raw / "decisions_vm2.json").write_text(_decisiones(ATACANTE))
+    r, _ = _run(tmp_path, raw=raw)
+    a = next(a for a in r["attackers"] if a["ip"] == ATACANTE)
+    assert a["crowdsec"] is True
+    assert a["crowdsec_sensors"] == ["vm2-crowdsec"]
+
+
+def test_las_dos_vms_sobre_la_misma_ip_se_acumulan(tmp_path):
+    raw = _raw(tmp_path)
+    (raw / "decisions.json").write_text(_decisiones(ATACANTE))
+    (raw / "decisions_vm2.json").write_text(_decisiones(ATACANTE))
+    r, _ = _run(tmp_path, raw=raw)
+    a = next(a for a in r["attackers"] if a["ip"] == ATACANTE)
+    assert a["crowdsec_sensors"] == ["vm1-crowdsec", "vm2-crowdsec"]
+
+
+def test_el_sensor_de_crowdsec_no_contamina_el_cruce(tmp_path):
+    """`sensors` es "dónde la vimos pegar"; una decisión no es un avistamiento.
+
+    Si CrowdSec entrara ahí, esta IP —vista sólo por el web de VM1— contaría
+    como "vista por >1 sensor" y el cruce del resumen mentiría.
+    """
+    raw = _raw(tmp_path)
+    (raw / "decisions_vm2.json").write_text(_decisiones(ATACANTE))
+    r, _ = _run(tmp_path, raw=raw)
+    a = next(a for a in r["attackers"] if a["ip"] == ATACANTE)
+    assert a["sensors"] == ["vm1-web"]
+
+
+def test_la_decision_no_crea_atacante_por_si_sola(tmp_path):
+    """CrowdSec ve el sshd real, que no es el honeypot: sin hit, no hay IOC."""
+    raw = _raw(tmp_path)
+    (raw / "decisions_vm2.json").write_text(_decisiones("45.9.148.200"))
+    r, _ = _run(tmp_path, raw=raw)
+    assert "45.9.148.200" not in [a["ip"] for a in r["attackers"]]
+
+
+def test_el_csv_de_misp_dice_que_crowdsec_hablo(tmp_path):
+    raw = _raw(tmp_path)
+    (raw / "decisions_vm2.json").write_text(_decisiones(ATACANTE))
+    _, out = _run(tmp_path, raw=raw)
+    with open(out / "iocs.csv") as f:
+        fila = next(r for r in csv.DictReader(f) if r["value"] == ATACANTE)
+    assert "crowdsec: vm2-crowdsec" in fila["comment"]
+
+
+def test_decisions_vacio_o_null_no_rompe(tmp_path):
+    """`cscli` devuelve `null` cuando no hay decisiones, y el pull escribe `[]`."""
+    raw = _raw(tmp_path)
+    (raw / "decisions.json").write_text("null")
+    (raw / "decisions_vm2.json").write_text("[]")
+    r, _ = _run(tmp_path, raw=raw)
+    a = next(a for a in r["attackers"] if a["ip"] == ATACANTE)
+    assert a["crowdsec"] is False
+    assert a["crowdsec_sensors"] == []
+
+
+def test_el_snapshot_por_fecha_guarda_las_dos_decisiones(tmp_path):
+    raw = _raw(tmp_path)
+    (raw / "decisions.json").write_text(_decisiones(ATACANTE))
+    (raw / "decisions_vm2.json").write_text(_decisiones(ATACANTE))
+    r, _ = _run(tmp_path, raw=raw)
+    guardado = r["daydir"] / "raw"
+    assert (guardado / "decisions.json").exists()
+    assert (guardado / "decisions_vm2.json").exists()
+
+
 def test_las_ips_privadas_se_ignoran_como_antes(tmp_path):
     """Regresión: el filtro `public()` es anterior a F-A y sigue mandando."""
     raw = _raw(tmp_path, ips=("127.0.0.1", "10.0.0.5", ATACANTE))

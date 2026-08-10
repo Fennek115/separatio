@@ -18,7 +18,11 @@ El archivo lo produce el colector con este esquema (una entrada por IP):
   {"generated": "<iso8601>", "window_hours": 24, "attackers": [
      {"ip": "1.2.3.4", "hits": 42, "kinds": ["web","cowrie"],
       "first_seen": "...", "last_seen": "...", "sample_uris": ["/.env", ...],
-      "crowdsec": true}]}
+      "crowdsec": true, "crowdsec_sensors": ["vm2-crowdsec"]}]}
+
+`crowdsec_sensors` dice CUÁL de los dos CrowdSec tomó la decisión (hay uno por
+VM y cada uno mira sólo el sshd real de su host): desde que el 22 de VM1 es de
+Cowrie, el de allá se quedó sin entrada. Ver `honeypot/EXPONER.md` §CrowdSec.
 """
 
 from __future__ import annotations

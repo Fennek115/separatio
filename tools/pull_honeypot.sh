@@ -8,7 +8,8 @@
 # Dos sensores (poblaciones distintas, ver honeypot/PLAN.md):
 #   - VM1 (synapse, 161.153.193.0): Cowrie SSH + Nginx web catch-all + CrowdSec.
 #   - VM2 (ivory,   146.181.45.153): Beelzebub, servicios "golosos" (Redis,
-#     Docker API, Elasticsearch, MySQL, Postgres, VNC). Ver honeypot/VM2-PLAN.md.
+#     Docker API, Elasticsearch, MySQL, Postgres, VNC) + CrowdSec sobre su sshd
+#     REAL, que sigue en el 22. Ver honeypot/VM2-PLAN.md.
 #
 # Requisitos (una vez):
 #   - Claves SSH de solo-lectura: id_oracle_synapse (VM1) e id_oracle_ivory (VM2).
@@ -41,8 +42,12 @@ if [ -z "${NO_PULL:-}" ]; then
   # Binarios que Cowrie descargó en sesión (2º stage real, nombrados por SHA-256).
   $SSH1 'sudo tar -C /home/cowrie/cowrie/var/lib/cowrie -cf - downloads 2>/dev/null' > "$RAW_DIR/cowrie_downloads.tar" || true
 
-  echo "[pull] VM2 (Beelzebub, servicios golosos) desde $VM2_HOST..."
+  echo "[pull] VM2 (Beelzebub + CrowdSec) desde $VM2_HOST..."
   $SSH2 'sudo cat /var/lib/beelzebub/logs/beelzebub.json 2>/dev/null'          > "$RAW_DIR/beelzebub.json" || true
+  # CrowdSec de VM2 (instalado el 2026-08-10): en VM1 el 22 pasó a Cowrie y su
+  # CrowdSec se quedó sin entrada útil, así que el sshd REAL de ivory es hoy la
+  # única fuente con fuerza bruta sostenida. Ver honeypot/EXPONER.md §CrowdSec.
+  $SSH2 'sudo cscli decisions list -o json 2>/dev/null'                        > "$RAW_DIR/decisions_vm2.json" || echo "[]" > "$RAW_DIR/decisions_vm2.json"
 fi
 
 # Consolidar a attackers.json (IP -> hits, tipos, sensores, señuelos, crowdsec).

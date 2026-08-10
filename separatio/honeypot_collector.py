@@ -193,7 +193,8 @@ def write_artifacts(raw, out, daydir, payload, events, payloads):
                 comment = (f"honeypot propio | {a['hits']} hits | "
                            f"servicios: {'+'.join(a['kinds']) or '?'} | "
                            f"sensores: {'+'.join(a['sensors']) or '?'}"
-                           + (" | crowdsec" if a["crowdsec"] else ""))
+                           + (f" | crowdsec: {'+'.join(a['crowdsec_sensors'])}"
+                              if a["crowdsec"] else ""))
                 w.writerow([a["ip"], "ip-src", "Network activity", 1,
                             comment, a.get("first_seen") or "", a.get("last_seen") or ""])
             # HASSH (fingerprint del cliente SSH) como IOC propio, tipo MISP hassh-md5.
@@ -216,7 +217,8 @@ def write_artifacts(raw, out, daydir, payload, events, payloads):
     (daydir / "raw").mkdir(parents=True, exist_ok=True)
     (daydir / "attackers.json").write_text(json.dumps(payload, indent=1))
     write_csv(daydir / "iocs.csv")
-    for name in ("cowrie.json", "web.json", "decisions.json", "beelzebub.json"):
+    for name in ("cowrie.json", "web.json", "decisions.json",
+                 "decisions_vm2.json", "beelzebub.json"):
         src = raw / name
         if src.exists() and src.stat().st_size:
             (daydir / "raw" / name).write_text(src.read_text(errors="ignore"))
@@ -301,6 +303,7 @@ def consolidate(raw: Path, out: Path, window: int, classifier=None,
         a = att.setdefault(ip, {"ip": ip, "hits": 0, "kinds": set(), "sensors": set(),
                                 "first_seen": None, "last_seen": None,
                                 "sample_uris": set(), "crowdsec": False,
+                                "crowdsec_sensors": set(),
                                 "class": cls, "scanner_name": name})
         if cls == SCANNER:
             hyg["scanners"].setdefault(name, set()).add(ip)
@@ -348,21 +351,35 @@ def consolidate(raw: Path, out: Path, window: int, classifier=None,
     parse_beelzebub(lines("beelzebub.json"), cutoff, bump, record)
     parse_cowrie_downloads(raw / "cowrie_downloads.tar", dl_meta, klass, payloads, events)
 
-    # --- CrowdSec (VM1): marcar IPs con decisión ---
-    try:
-        for d in json.loads((raw / "decisions.json").read_text() or "[]"):
-            for dec in d.get("decisions", []) or []:
-                ip = dec.get("value")
-                if ip in att:
-                    att[ip]["crowdsec"] = True
-    except Exception:
-        pass
+    # --- CrowdSec: marcar IPs con decisión, ATRIBUYENDO EL SENSOR ---
+    # Son dos CrowdSec independientes, uno por VM, y cada uno mira sólo el sshd
+    # REAL de su host (no parsea ni Cowrie ni Beelzebub ni el nginx del honeypot).
+    # Por eso la fuente importa: desde que el 22 de VM1 es de Cowrie, el de allá
+    # se quedó sin entrada y el único con señal sostenida es el de VM2.
+    # Ver honeypot/EXPONER.md §CrowdSec.
+    #
+    # OJO: el sensor de CrowdSec NO entra en a["sensors"]. Ese conjunto significa
+    # "dónde la vimos pegar" y alimenta el conteo de "vista por >1 sensor"; una
+    # decisión es un juicio derivado del mismo sshd, no un avistamiento
+    # independiente, y mezclarlos inflaría el cruce con una señal que no lo es.
+    for fname, sensor in (("decisions.json", "vm1-crowdsec"),
+                          ("decisions_vm2.json", "vm2-crowdsec")):
+        try:
+            for d in json.loads((raw / fname).read_text() or "[]") or []:
+                for dec in d.get("decisions", []) or []:
+                    ip = dec.get("value")
+                    if ip in att:
+                        att[ip]["crowdsec"] = True
+                        att[ip]["crowdsec_sensors"].add(sensor)
+        except Exception:
+            pass
 
     attackers = []
     for a in att.values():
         a["kinds"] = sorted(a["kinds"])
         a["sensors"] = sorted(a["sensors"])
         a["sample_uris"] = sorted(a["sample_uris"])[:5]
+        a["crowdsec_sensors"] = sorted(a["crowdsec_sensors"])
         a["hassh"] = sorted(a.get("hassh", []))
         attackers.append(a)
     attackers.sort(key=lambda a: a["hits"], reverse=True)
@@ -416,6 +433,13 @@ def main(argv: list[str] | None = None) -> int:
           + (f" [{', '.join(h['scanners'])}]" if h["scanners"] else ""))
     print(f"[pull] {len(attackers)} IPs atacantes públicas "
           f"({cross} vistas por >1 sensor, {h['unknown_ips']} sin clasificar)")
+    cs = {}
+    for a in attackers:
+        for s in a.get("crowdsec_sensors", []):
+            cs[s] = cs.get(s, 0) + 1
+    if cs:
+        print("[pull] crowdsec: "
+              + " · ".join(f"{n} IP(s) por {s}" for s, n in sorted(cs.items())))
     print(f"[pull]   IOCs:     {out/'attackers.json'} + {out/'iocs.csv'}")
     print(f"[pull]   técnicas: {len(events)} eventos -> {r['daydir']/'events.jsonl'}")
     print(f"[pull]   payloads: {len(payloads)} únicos ({r['new_payloads']} nuevos al corpus) "
