@@ -17,12 +17,20 @@ Estado git: **pusheado a `Fennek115/separatio`** el 2026-08-08. El repo viejo
 `Fennek115/ip_threatcheck` (también público) quedó congelado en GitHub — pendiente decidir
 si se archiva.
 
-## ⚠️ Trabajo en curso: el REWORK
+## ⚠️ Empezá por acá
 
-Desde el 2026-08-09 el proyecto está en un **rework por fases, una por sesión**. Si vas a tocar
-código, el punto de entrada es **`docs/REWORK-ESTADO.md`** (tabla de estado, protocolo de sesión y
-prompt de arranque), no este archivo. El diseño está en `docs/PLAN-REWORK.md` y el detalle de cada
-fase en `docs/fases/`.
+**El punto de entrada es [`docs/ESTADO.md`](docs/ESTADO.md)**, no este archivo. Consolida las dos
+cadenas de fases (F0→F4, la del proyecto; F-A→F-I, la del rework), dice qué falta y marca la
+frontera de qué **no** puede entrar a este repo por ser público.
+
+Desde el 2026-08-10 la documentación de Separatio que vivía en `~/Projects/Motherbase` está acá;
+Motherbase volvió a ser sólo el proyecto del host Proxmox. **Excepción deliberada:** el as-built
+del honeypot (`Motherbase/honeypot/`) se queda allá, porque nombra IPs públicas del sensor y de
+casa — publicarlas quema el sensor. Ver `docs/ESTADO.md` §Qué NO vive acá.
+
+Si vas a tocar **código**, después de `docs/ESTADO.md` seguí por **`docs/REWORK-ESTADO.md`** (estado
+del rework, protocolo de sesión y prompt de arranque). El diseño está en `docs/PLAN-REWORK.md` y el
+detalle de cada fase en `docs/fases/`.
 
 **Estado al 2026-08-09: no queda fase ejecutable sin dato real.** F-A (higiene de la entrada),
 **F-H (observabilidad de la corrida)**, **F-I (afinado de prompts)**, **F-B1 (el store)**, **F-B2
