@@ -350,6 +350,19 @@ def save_report(markdown_content: str, output_dir: str,
         "full":          filename_prefix or "threat-briefing",
     }
 
+    # Un valor con typo dejaría los tres flags en False y el informe no se
+    # escribiría **en silencio** — el modo de fallo que este proyecto ya se comió
+    # dos veces (la fuente sin key de F-H, el PDF que nunca se generó). Desde que
+    # `OUTPUT_FORMAT` se puede poner por entorno (2026-08-10) el typo es fácil,
+    # así que se valida y se cae al default avisando.
+    FORMATOS = ("markdown", "html", "both", "pdf", "all")
+    if fmt not in FORMATOS:
+        logger.warning(
+            f"OUTPUT_FORMAT='{fmt}' no es válido (esperaba uno de {FORMATOS}) — "
+            f"se usa 'both'. Nada se habría escrito con ese valor."
+        )
+        fmt = "both"
+
     write_md   = fmt in ("markdown", "both", "all")
     write_html = fmt in ("html", "both", "all")
     write_pdf  = fmt in ("pdf", "all")

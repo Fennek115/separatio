@@ -426,6 +426,16 @@ class Settings:
             SCANNER_PTR_LOOKUP=env_bool("SCANNER_PTR_LOOKUP", True, src),
             STORE_ENABLED=env_bool("STORE_ENABLED", True, src),
             LOCAL_LISTS_ENABLED=env_bool("LOCAL_LISTS_ENABLED", True, src),
+            # Mira el entorno desde el 2026-08-10, y entra en la definición de
+            # arriba ("un toggle para apagar algo en el CT sin editar código"):
+            # el CT publica los informes por copyparty y quiere PDF, el laptop
+            # no. Hasta ese día el README lo documentaba como configurable y no
+            # lo era, así que producción llevaba desde el principio sin generar
+            # un solo PDF — el default "both" es md+html y `_write_pdf` no se
+            # llamaba nunca. El default no se repite acá a propósito: sale del
+            # campo de arriba, así no pueden divergir. Los valores válidos los
+            # valida `reporter`, que es donde el logging ya está configurado.
+            OUTPUT_FORMAT=src.get("OUTPUT_FORMAT", cls.OUTPUT_FORMAT),
             MALWAREBAZAAR_AUTH_KEYS=auth_keys,
         )
 

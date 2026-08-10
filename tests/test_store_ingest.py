@@ -7,6 +7,7 @@ El tiempo se pasa siempre explícito, como en `tests/test_store.py`.
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from separatio.honeypot_collector import consolidate
 from separatio.hygiene import IpClassifier
@@ -222,8 +223,14 @@ def test_el_pull_sigue_funcionando_sin_store(tmp_path, monkeypatch):
 
     raw = tmp_path / "raw"
     raw.mkdir()
+    # Timestamp RELATIVO, no `DAY`: este es el único test del fichero que pasa
+    # por `consolidate()`, que descarta lo que caiga fuera de la ventana de 24 h.
+    # Con la fecha fija el test se rompía solo todos los días pasadas las 07:00
+    # UTC — se descubrió el 2026-08-10 cuando explotó. Los demás usos de `DAY`
+    # van a `ingest_run`/backfill, que no filtran por tiempo, y ahí sí sirve fija.
+    reciente = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     (raw / "web.json").write_text(json.dumps({
-        "ts": DAY, "ip": IP, "host": "h", "method": "GET",
+        "ts": reciente, "ip": IP, "host": "h", "method": "GET",
         "uri": "/.env", "status": 404, "ua": "curl/8", "body": "",
     }) + "\n")
 
