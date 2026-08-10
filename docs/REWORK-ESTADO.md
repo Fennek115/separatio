@@ -3,7 +3,7 @@
 > **Si estás empezando una sesión del rework, leé este archivo primero y nada más.**
 > Te dice en qué fase está, qué sigue, y qué archivo abrir para hacerlo.
 
-Última actualización: **2026-08-10** (despliegue de las nueve fases al CT 113 — ver §Despliegue)
+Última actualización: **2026-08-10** (despliegue de las nueve fases, honeypots expuestos y los cuatro bugs que eso destapó)
 
 Diseño y fundamentos: [`PLAN-REWORK.md`](PLAN-REWORK.md) (el *qué* y el *por qué*).
 Este archivo es el *cuándo* y el *cómo se ejecuta*.
@@ -78,8 +78,8 @@ real.
 | — | **F-B2** | [Ingesta idempotente y backfill](fases/F-B2.md) | ☑ **Hecha el 2026-08-09** — `separatio/store/ingest.py` (`ingest_run()`, punto único de escritura), `honeypot_collector.consolidate()` cablea la escritura envuelta en try/except, `separatio/store/backfill.py` (recorre `by-date/*/`, reclasifica snapshots anteriores a F-A). 146 tests. Verificado con IP sintética: reingerir la misma ventana deja `times_seen=1` y `count(*) observation` sin cambios. El único snapshot real (`2026-08-08/`) es la IP propia del laptop — el backfill la excluyó correctamente (0 IOCs). **☑ desplegada al CT 113 el 2026-08-10** |
 | — | **F-E** | [Listas locales](fases/F-E.md) | ☑ **Hecha el 2026-08-09** — `separatio/lists.py` (`LocalLists`: `array('I')` + bisect para IPs sueltas, rangos `(inicio,fin)` + bisect para CIDR), cache en `data/feeds/` con TTL de 12h y fail-open a copia vencida, `IPSUM_URL` corregido a la base (`levels/3.txt` no trae score, el plan lo asumía mal). 157 tests. Verificado con techo duro en el CT: **79,8 MB de pico** (techo 120 MB) tras corregir dos fugas de RAM que el plan no había previsto. Cableada por F-C. **☑ desplegada al CT 113 el 2026-08-10** |
 | — | **F-C** | [Enricher inverso y triage](fases/F-C.md) | ☑ **Hecha el 2026-08-09** — `separatio/enrichers/honeypot_recon.py` (`HoneypotReconEnricher`): triage en 4 etapas (higiene → cache → listas locales de F-E → residuo), presupuesto declarativo (`config.QUOTAS`) contado contra el store, sólo el resultado NEGATIVO de GreyNoise escala a la cascada de `ipcheck`. 171 tests (14 nuevos). Verificado con 3 IOCs / 2 candidatas del store y GreyNoise mockeado a propósito — **corrección del 2026-08-10: esos IOCs no eran reales, eran fixtures que `pytest` inyectó en el store** (ver §Bugs abiertos); el triage quedó ejercitado igual, pero no contra tráfico real (no gastar cuota real sin pedirlo) y `separatio --dry-run` intacto. **☑ desplegada al CT 113 el 2026-08-10.** Pendiente: prender el toggle con GreyNoise real (gasta cuota, decisión del usuario) |
-| — | **F-D** | [Reincidencia](fases/F-D.md) | ☑ **Código y tests hechos el 2026-08-09** — `separatio/store/queries.py` (`ip_recurrence`/`payload_history`/`hassh_fanout`/`top_recurrent`), `HoneypotReconEnricher` suma la reincidencia al `detail` de la señal fuerte y a tres notas nuevas, `config.RECURRENCE_WINDOW_DAYS`/`HASSH_MIN_IPS`/`HASSH_WINDOW_DAYS`. 180 tests (9 nuevos). **Cierre real bloqueado por tráfico SSH**: 0 IPs con `days_seen >= 2` y 0 HASSH en el store de producción — la verificación en vivo queda pendiente explícito, no se declaró hecha con datos sintéticos. **☑ desplegada al CT 113 el 2026-08-10** |
-| — | **F-F** | [YARA sobre el corpus](fases/F-F.md) | ☐ Bloqueada por corpus real (2026-08-10: **1 payload de 2 bytes** en el CT, de `vm1-cowrie` — no es corpus) |
+| — | **F-D** | [Reincidencia](fases/F-D.md) | ☑ **Código y tests hechos el 2026-08-09** — `separatio/store/queries.py` (`ip_recurrence`/`payload_history`/`hassh_fanout`/`top_recurrent`), `HoneypotReconEnricher` suma la reincidencia al `detail` de la señal fuerte y a tres notas nuevas, `config.RECURRENCE_WINDOW_DAYS`/`HASSH_MIN_IPS`/`HASSH_WINDOW_DAYS`. 180 tests (9 nuevos). **Cierre real bloqueado por tráfico SSH** — la verificación en vivo queda pendiente explícito, no se declaró hecha con datos sintéticos. **2026-08-10: se desbloqueó a medias.** Con los honeypots expuestos, el store pasó de 0 a **28 IOCs (9 escáneres, 19 desconocidas), 75 observaciones y 2 payloads** en el primer pull. Pero `days_seen >= 2` sigue en 0 **por definición**: hace falta que pase un segundo día. Revisar el 2026-08-11: si una IP vuelve, F-D se cierra con la frase que el criterio del rework pide. **☑ desplegada al CT 113 el 2026-08-10** |
+| — | **F-F** | [YARA sobre el corpus](fases/F-F.md) | ◐ **Desbloqueándose**: con los honeypots expuestos el 2026-08-10 el primer pull ya trajo 2 payloads (1 nuevo). Reevaluar en días, cuando haya corpus de verdad |
 | **3** | **F-G** | [Deuda técnica](fases/F-G.md) | ☑ **HECHA el 2026-08-09 — los siete ítems (G-1…G-7) cerrados.** Era el único track sin dependencia de tráfico real, y se cerró entero en el día. **G-2 (el último)**: dataclass congelado `separatio/settings.py:Settings` + `config.py` como fachada de 40 líneas; las etapas de `pipeline.py` reciben `settings` por parámetro y **se eliminó la mutación global de `config` en caliente** de la que dependía el aislamiento del `--dry-run` (el fix del incidente del 2026-08-08) — ahora es `settings_for(args)`, función pura. Los 97 valores verificados idénticos (valor y tipo) contra el config previo; acoplamiento 187 → 45 referencias; 339 tests (32 nuevos). G-3: `pipeline.py` 985 → 839 líneas, tres módulos hoja nuevos (`deduplicator.py`, `ioc_processor.py`, `router.py`), 228 tests (45 nuevos — `pipeline.py` no tenía ninguno). G-5: paquete `separatio/providers/` (ABC `LLMProvider` + 4 subclases + fábrica) reemplaza el `if provider ==` de `_llm_chat` y el streaming de Ollama duplicado; `analyzer.py` 1241 → 1154 líneas, 264 tests (36 nuevos), verificado con una llamada real contra Claude. **G-6: el único ítem de F-G que cambió la salida a propósito** (decisión explícita del usuario, variante completa de §6.2) — plantillas a `separatio/templates/*.html.j2` (Jinja2) y parser de regex → librería `markdown`; `reporter.py` 830 → 400 líneas, 307 tests (43 nuevos — tampoco tenía ninguno), +2 dependencias (2,1 MB, +13,3 MB RSS) |
 
 ### Dependencias y orden
@@ -272,7 +272,7 @@ no por lista de exclusiones, para que no se pudra.
 Verificado: los dos informes que ya existían (`2026-08-08`, `2026-08-09`) quedaron publicados y se
 ven desde el CT de copyparty.
 
-### Bugs encontrados desplegando — ☑ los tres arreglados el 2026-08-10
+### Bugs encontrados desplegando — ☑ los cuatro arreglados el 2026-08-10
 
 **1. `pytest` escribía en el store de producción.** Descubierto el 2026-08-10 desplegando. Desde
 F-B2, `honeypot_collector.consolidate()` abre el store con `store.db.store()` **sin ruta**, así que
@@ -311,16 +311,36 @@ y devuelve los totales del mismo `ingest_run` que la corrida real. Test nuevo
 son **iguales** a los de la corrida real sobre el mismo `by-date/`.
 
 **3. El CT no generaba ningún PDF, y no se notaba.** Encontrado el 2026-08-10 al ir a publicar los
-informes. `weasyprint` estaba instalado como paquete Python pero **sin las librerías del sistema**
-(`libpango`), así que `import weasyprint` moría con `OSError`; `reporter._write_pdf` lo caza con un
-`except Exception` genérico, loguea "Error generando PDF" y devuelve `False`. Resultado: desde que
-el pipeline está en producción sólo salieron `.md` y `.html`, y nadie lo vio. **Es exactamente el
-patrón que ya había encontrado F-H** — "una fuente habilitada sin key no falla, se calla" — pero en
-la salida en vez de en la entrada.
+informes. Eran **dos causas encadenadas**, y la primera hipótesis de la sesión era la menos
+importante — queda anotado porque es justo el error que la regla del rework existe para evitar:
 
-Arreglado instalando en el CT `libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfontconfig1
-libgdk-pixbuf-2.0-0 fonts-dejavu-core`. Verificado: `weasyprint 69.0` renderiza un PDF de 5.098
-bytes con cabecera `%PDF-`. El primer PDF real lo produce la corrida diaria.
+- *Lo que se vio primero:* `weasyprint` estaba instalado como paquete Python pero **sin las
+  librerías del sistema** (`libpango`), así que `import weasyprint` moría con `OSError`. Se dio por
+  sentado que ésa era la causa, razonando sobre el `except Exception` genérico de `_write_pdf`.
+- *La causa de fondo, verificada contra la máquina:* **`OUTPUT_FORMAT` estaba declarado en
+  `Settings` pero `from_env()` nunca lo leía**, así que valía siempre su default `"both"` (md+html)
+  y **`_write_pdf` no se llamaba jamás**. El `OSError` de weasyprint ni siquiera llegaba a ocurrir
+  dentro del pipeline. El README documentaba `OUTPUT_FORMAT` como configurable y no lo era: ponerlo
+  en `/etc/intel/intel.env` no hacía absolutamente nada — comprobado, seguía valiendo `'both'` con
+  la variable presente en el entorno del proceso.
+
+Arreglado en las dos capas: las librerías del sistema en el CT (`libpango-1.0-0 libpangoft2-1.0-0
+libharfbuzz0b libfontconfig1 libgdk-pixbuf-2.0-0 fonts-dejavu-core`), y `OUTPUT_FORMAT` cableado al
+entorno en `settings.from_env()` —encaja en la definición que da su propio docstring, "los toggles
+que existen para poder apagar algo en el CT sin editar código"— con `OUTPUT_FORMAT=all` en el env
+file del CT. El default no se repite en `from_env`: sale del campo del dataclass, así no divergen.
+
+Y de yapa, **la cuarta vez del mismo modo de fallo**: un `OUTPUT_FORMAT` con typo dejaba los tres
+flags de escritura en `False` y el informe **no se escribía en silencio**. Ahora `reporter` valida
+contra la lista de formatos y cae al default avisando. Verificado de punta a punta: PDF de 85.368
+bytes con cabecera `%PDF-`, publicado y visible desde el CT de copyparty.
+
+**4. Un test que era una bomba de tiempo.** `test_el_pull_sigue_funcionando_sin_store` usaba la
+constante `DAY` (fecha **fija**) para un evento que pasa por `consolidate()`, que descarta lo que
+caiga fuera de una ventana **relativa** de 24 h. O sea que fallaba solo todos los días pasadas las
+07:00 UTC; explotó a mitad de esta sesión, y se confirmó contra el código sin tocar que no era una
+regresión. Pasó a un timestamp relativo. Los demás usos de `DAY` van a `ingest_run`/backfill, que no
+filtran por tiempo, y ahí la fecha fija está bien.
 
 <details>
 <summary>Pendientes de despliegue acumulados (histórico — todos cerrados el 2026-08-10)</summary>

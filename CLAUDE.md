@@ -305,16 +305,16 @@ desmontaron — las pruebas van en contenedores).
 
 ## Pendiente (en orden)
 
-0. ⚠️ **Exponer los honeypots — es lo único que separa al proyecto de estar cerrado.** Los
-   servicios ya corren en las dos VMs; lo que bloquea es el `iptables` del OS (INPUT sólo deja el
-   22) y, para los puertos nuevos, la Security List de OCI. Decidido con el usuario el 2026-08-10:
-   en **VM1 (synapse)** el sshd admin se muda a un puerto alto y el **22 se le da a Cowrie por
-   DNAT** —ahí está el tráfico de fuerza bruta que hoy va al sshd real y se tira, que es justo lo
-   que F-D necesita—, más 2223 y 80/443; en **VM2 (ivory)** se abren los seis de Beelzebub (6379,
-   3306, 5432, 5900, 9200, 2375). Ojo con dos cosas: **hay una sola Security List para las dos
-   VMs** (el control fino es el iptables de cada una), y mover el sshd obliga a reapuntar el
-   colector del CT 113 (`hp-pull`) al puerto nuevo. Hacerlo con sesión abierta y verificando desde
-   otra terminal, según la regla del proyecto madre. Reglas de ingress ya calculadas.
+0. ⚠️ **Cerrar F-D contra dato real — se puede a partir del 2026-08-11.** Los honeypots se
+   expusieron el 2026-08-10 y el store pasó de vacío a **28 IOCs / 75 observaciones / 2 payloads**
+   en el primer pull. Lo único que falta para el criterio de cierre del rework es que **pase un
+   segundo día**: `days_seen >= 2` sigue en 0 por definición. Si una IP vuelve, F-D se cierra con
+   la frase que el criterio pide. Ver `docs/fases/F-D.md`.
+
+   *(Contexto del acceso, que cambió: **el 22 de synapse es de Cowrie**; la administración va por
+   **62022**, y el colector del CT 113 ya está reapuntado. As-built y trampas —Ubuntu 24.04 activa
+   sshd por socket, `ListenStream` pelado bindea sólo IPv6, el REDIRECT hace que INPUT vea 2222— en
+   `~/Projects/Motherbase/honeypot/EXPONER.md`.)*
 
    *(Lo de esta tanda que ya está hecho, 2026-08-10: el despliegue de las nueve fases —CT en
    `dc5e850`, reinstalado, `OWN_IPS` puesta, backfill corrido, `honeypot-pull.service` verificado
