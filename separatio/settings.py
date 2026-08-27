@@ -212,6 +212,7 @@ class Settings:
         "honeypot":       False,   # F3: prender cuando el pull traiga dato real
         "malwarebazaar":  True,    # punto-5: ON (ABUSECH_API_KEY; no-op si falta)
         "honeypot_recon": True,    # F-C: ON desde 2026-08-10 (hay tráfico real)
+        "anci":           True,    # CSIRT Chile: API pública, sin key ni cuota
     })
 
     # NO usar levels/3.txt acá: verificado por HTTP en F-E (2026-08-09) que esos
@@ -233,6 +234,45 @@ class Settings:
     RANSOMWARELIVE_URL: str = "https://api.ransomware.live/v2/recentvictims"
     RANSOMWARE_LOOKBACK_HOURS: int = 26   # margen sobre 24h
     RANSOMWARE_MAX_VICTIMS: int = 15      # tope de líneas al prompt de síntesis
+
+    # anci (CSIRT Nacional de Chile / ANCI): API pública sin key ni registro,
+    # datos CC BY-SA 4.0 — **la atribución es obligatoria** y la pone el `name`
+    # del enricher. Los hallazgos que explican estos valores están medidos en el
+    # docstring de `anci_client.py`; los dos que se pagan acá:
+    #   · el listado de alertas viene ordenado por fecha de REVISIÓN, no de
+    #     publicación, y `from_date`/`to_date` filtran por revisión — por eso el
+    #     cliente pagina por revisión y filtra por publicación de su lado;
+    #   · hay rate limit no documentado detrás de Cloudflare (429 / `error code:
+    #     1015` en texto plano), de ahí la caché en disco con TTL.
+    ANCI_URL: str = "https://csirt.gob.cl/api/v1/"
+    ANCI_LOOKBACK_HOURS: int = 26        # margen sobre 24h, igual que ransomware_live
+    ANCI_WEEKLY_LOOKBACK_DAYS: int = 7   # ventana de la corrida semanal (--weekly)
+    ANCI_CORPUS_DAYS: int = 90           # corpus que se cruza contra IOCs y CVEs
+    ANCI_MAX_NOTES: int = 10             # alertas (y documentos nuevos) al prompt
+    ANCI_MAX_CVE_ALERTS: int = 5         # alertas de vulnerabilidad que se citan
+    ANCI_MAX_CVES_PER_ALERT: int = 8     # una de Patch Tuesday trae hasta 500
+    ANCI_MAX_NEWS: int = 5               # 0 = no mandar noticias al prompt
+    # Prefijos de categoría de /documents/ que sí aportan a threat intel. Medido:
+    # `boletines` (boletín de ciberseguridad) y `documentos` (informes). Se deja
+    # fuera cualquier categoría de guías/concientización, y es config para no
+    # tener que tocar código cuando ANCI agregue una.
+    ANCI_DOC_CATEGORIES: tuple = ("boletines", "documentos")
+    ANCI_PAGE_SIZE: int = 100            # tope real del backend (pedir más da 100)
+    ANCI_MAX_PAGES: int = 10
+    # Segundos mínimos entre peticiones. El rate limit de Cloudflare cuenta
+    # peticiones, no páginas: con 0,5 s saltaba el 429 encadenando los tres
+    # paginados (alertas + noticias + documentos), medido el 2026-08-19.
+    ANCI_PAUSE: float = 2.0
+    ANCI_CACHE_DIR: str = str(REPO_ROOT / "data" / "feeds" / "anci")
+    ANCI_EXPORT_IOCS: bool = True        # volcado local CSV + listas por tipo
+    ANCI_EXPORT_DIR: str = str(REPO_ROOT / "data" / "feeds")
+    ANCI_CACHE_TTL: dict = field(default_factory=lambda: {
+        "alerts":    6 * 3600,
+        "news":      24 * 3600,
+        "documents": 7 * 24 * 3600,
+        "events":    24 * 3600,
+        "galleries": 7 * 24 * 3600,
+    })
 
     # onion_lookup (metadatos de .onion vía CIRCL/AIL, sin tocar Tor):
     ONIONLOOKUP_URL: str = "https://onion.ail-project.org/api/lookup"

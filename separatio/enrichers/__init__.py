@@ -86,6 +86,32 @@ def build_enrichers(settings) -> list[Enricher]:
             hassh_window_days=getattr(settings, "HASSH_WINDOW_DAYS", 30),
         ))
 
+    if toggles.get("anci"):
+        from separatio.anci_client import AnciClient
+        from separatio.enrichers.anci import AnciEnricher
+        enrichers.append(AnciEnricher(
+            AnciClient(
+                base_url=getattr(settings, "ANCI_URL",
+                                 "https://csirt.gob.cl/api/v1/"),
+                timeout=getattr(settings, "KEV_FETCH_TIMEOUT", 15),
+                page_size=getattr(settings, "ANCI_PAGE_SIZE", 100),
+                max_pages=getattr(settings, "ANCI_MAX_PAGES", 10),
+                pause=getattr(settings, "ANCI_PAUSE", 0.5),
+                cache_dir=getattr(settings, "ANCI_CACHE_DIR", None),
+                ttl=dict(getattr(settings, "ANCI_CACHE_TTL", {}) or {}),
+            ),
+            lookback_hours=getattr(settings, "ANCI_LOOKBACK_HOURS", 26),
+            corpus_days=getattr(settings, "ANCI_CORPUS_DAYS", 90),
+            max_notes=getattr(settings, "ANCI_MAX_NOTES", 10),
+            max_cve_alerts=getattr(settings, "ANCI_MAX_CVE_ALERTS", 5),
+            max_cves_per_alert=getattr(settings, "ANCI_MAX_CVES_PER_ALERT", 8),
+            max_news=getattr(settings, "ANCI_MAX_NEWS", 5),
+            doc_categories=getattr(settings, "ANCI_DOC_CATEGORIES", ()),
+            export=getattr(settings, "ANCI_EXPORT_IOCS", True),
+            export_dir=getattr(settings, "ANCI_EXPORT_DIR", "data/feeds"),
+            state_dir=getattr(settings, "ANCI_CACHE_DIR", "data/feeds/anci"),
+        ))
+
     if toggles.get("malwarebazaar"):
         from separatio.enrichers.malwarebazaar import MalwareBazaarEnricher
         enrichers.append(MalwareBazaarEnricher(

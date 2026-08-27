@@ -136,6 +136,9 @@ Miniflux API (unread articles, ordered by published_at desc)
   - OpenPhishEnricher— phishing URLs/domains (OpenPhish feed, no key)
   - IpReputationEnricher — IPs via the ipcheck library (AbuseIPDB/VT/GreyNoise/
                        OTX/URLhaus/ThreatFox/Shodan); needs keys, OFF by default
+  - AnciEnricher     — alertas del CSIRT Nacional de Chile (API pública, sin key):
+                       notas de la ventana + cruce de IOCs + **cruce de CVEs** con
+                       CVSS/EPSS ya calculados. Cliente en `anci_client.py`
   → EnrichmentContext.format_for_prompt() appended to CorrelationContext
     .extra_blocks (so it reaches Stage 3 without changing analyzer.py signatures)
   → Whole stage wrapped in try/except in pipeline.stage27_enrich: never aborts
@@ -179,6 +182,19 @@ salta por falta de key se marca `skipped: <motivo>` y **`run_enrichment` no pued
 no lanzar no es lo mismo que haber consultado la fuente. Para agregar un recorte nuevo, una línea:
 `runlog.record_drop("donde", shown, total, detail=...)` — si `total <= shown` no registra nada.
 
+**El enricher de ANCI cruza CVEs, no sólo IOCs** (2026-08-19): `Enricher.enrich` sólo recibe el mapa
+de IOCs del día, así que para poder decir "el CSIRT nacional emitió alerta por 7 de las CVEs de las
+que hablan hoy los feeds" se agregó `EnrichmentContext.cves` — lo puebla `run_enrichment` desde los
+resúmenes de Stage 2 y es aditivo: no cambia la firma del ABC ni ningún enricher previo. El cliente
+(`anci_client.py`) es un módulo hoja que **no importa `config`**, con caché en disco y sus seis
+trampas medidas en el docstring (el listado no viene en orden de publicación, hay rate limit de
+Cloudflare, las IPs son del alojamiento y 40 % son del CDN…). Ver `../docs/CAPAS-Y-FUENTES.md`.
+
+**El informe semanal ahora sí corre Stage 2.7** (2026-08-19): `run_weekly` cargaba las cachés de
+Stage 2 y se iba derecho a `generate_weekly_report`, así que el informe del lunes era el único sin
+enrichment externo. Ahora llama a `stage27_enrich` con `cfg.derive(ANCI_LOOKBACK_HOURS=...)` para
+estirar la ventana a la semana, y `build_weekly_prompt` anexa el bloque igual que las fases diarias.
+
 **Enrichment (Stage 2.7) injects via `CorrelationContext.extra_blocks`**: rather than threading a new param through `generate_report`/`generate_phase_report`, `stage27_enrich` appends the enrichment prompt block to `correlation.extra_blocks`, which `format_for_prompt()` renders at the end. This keeps `analyzer.py` signatures untouched. Enrichment only reaches phases that already receive `correlation` (vulnerability, threat_intel).
 
 **`ip_reputation` enricher imports ipcheck as a package** (since 2026-08-08): `enrichers/ip_reputation.py` does `from ipcheck import ip_enricher` (lazy, inside `_load_lib`) — `IPCHECK_DIR` and the `sys.path.insert` hack are gone. It paces VirusTotal (sleeps `ENRICH_VT_SLEEP`s only after an IP reaches Level 3) and caps calls at `ENRICH_MAX_IPS`.
@@ -191,7 +207,7 @@ no lanzar no es lo mismo que haber consultado la fuente. Para agregar un recorte
 
 **Stage 2 fail-fast**: `stage2_summarize` aborts if ≥`STAGE2_FAIL_FAST_THRESHOLD` (0.5) of articles fail to summarize — avoids burning hours on Stage 3 to emit an empty report when the LLM provider is down.
 
-**Tests**: `venv/bin/pytest tests/ -q` desde la raíz del monorepo — **339**, deterministas y sin red (HTTP monkeypatched). El roadmap de refactors grandes de `../docs/IMPROVEMENTS.md` §6 está **completo**: los cinco (provider abstraction §6.1, reporter con plantillas §6.2, pipeline split §6.3, configuración inyectable §6.4 e IOC export §6.5) se hicieron el 2026-08-09 en F-G.
+**Tests**: `venv/bin/pytest tests/ -q` desde la raíz del monorepo — **386**, deterministas y sin red (HTTP monkeypatched). El roadmap de refactors grandes de `../docs/IMPROVEMENTS.md` §6 está **completo**: los cinco (provider abstraction §6.1, reporter con plantillas §6.2, pipeline split §6.3, configuración inyectable §6.4 e IOC export §6.5) se hicieron el 2026-08-09 en F-G.
 
 **La configuración es un objeto, no un módulo global** (F-G/G-2, 2026-08-09): la fuente de verdad es el dataclass congelado `settings.py:Settings` — ahí se editan los valores fijos. `config.py` quedó como fachada de 40 líneas (`SETTINGS = Settings.from_env()` y sus campos como constantes de módulo), así que `config.MAX_ARTICLES` y el `monkeypatch.setattr(config, ...)` de los tests siguen funcionando. **Para código nuevo: recibí un `Settings` por parámetro** (`settings=None` con fallback a `config.SETTINGS`, como hacen las etapas de `pipeline.py`, `build_classifier`, `open_store`, `build_enrichers`, `LocalLists.from_config`). Dos cosas que no se pueden romper sin querer: los campos van en **MAYÚSCULAS** porque `hygiene` y `setup_check` leen por nombre dinámico, y el aislamiento del `--dry-run` ahora sale de `pipeline.settings_for(args)` — antes se mutaba `config.OUTPUT_DIR` en caliente.
 
@@ -257,6 +273,7 @@ Key tunable values:
 | `ENRICH_PROMPT_MAX_PER_SOURCE` | 25 | Veredictos por fuente que entran al prompt; el resto se registra como recorte |
 | `ENRICHMENT_ENABLED` | True | Master switch for Stage 2.7 |
 | `ENRICHERS` | all three on | Per-enricher toggles (VT active since 2026-08-08: key in the root `.env`) |
+| `ANCI_*` | ver `settings.py` | CSIRT Chile: ventana (26 h; 7 días en `--weekly`), corpus de cruce (90 d), topes de prompt, categorías de documentos, TTL de caché y throttle (2 s **entre peticiones**) |
 | `IPSUM_MIN_SCORE` | 3 | Min public blocklists reporting an IP to flag it |
 | `ENRICH_MAX_IPS` / `ENRICH_VT_SLEEP` | 25 / 15 | API-IP cap / VT pacing (Level-3 IPs) |
 

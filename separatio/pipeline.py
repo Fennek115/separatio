@@ -159,6 +159,15 @@ def run_weekly(days: int = 7, settings: Settings | None = None) -> None:
         f"{dates_found[0]} → {dates_found[-1]}"
     )
 
+    # Hasta hoy el weekly no corría Stage 2.7: se generaba sólo con las cachés de
+    # Stage 2, así que el informe del lunes era el único sin enrichment externo.
+    # La ventana de las fuentes que la usan (ANCI) se estira a la semana con
+    # `derive`, que ya existe — sin plumbing nuevo.
+    enrichment = stage27_enrich(
+        all_summaries,
+        cfg.derive(ANCI_LOOKBACK_HOURS=cfg.ANCI_WEEKLY_LOOKBACK_DAYS * 24),
+    )
+
     markdown = generate_weekly_report(
         summaries=all_summaries,
         dates=dates_found,
@@ -172,6 +181,7 @@ def run_weekly(days: int = 7, settings: Settings | None = None) -> None:
         num_threads=cfg.OLLAMA_NUM_THREADS,
         max_tokens=cfg.REPORT_MAX_TOKENS,
         provider=cfg.PROVIDER,
+        enrichment=enrichment,
     )
 
     total_feeds = len(set(s.feed_title for s in all_summaries))
@@ -188,7 +198,7 @@ def run_weekly(days: int = 7, settings: Settings | None = None) -> None:
         filename_prefix="weekly-briefing",
     )
 
-    ioc_paths = export_iocs(all_summaries, week_label, weekly_dir)
+    ioc_paths = export_iocs(all_summaries, week_label, weekly_dir, enrichment)
     paths.update(ioc_paths)
     _print_result(paths)
 

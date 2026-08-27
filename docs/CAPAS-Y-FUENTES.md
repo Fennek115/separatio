@@ -207,6 +207,54 @@ Así que casi todo esto son **enrichers nuevos**, no una arquitectura nueva.
 | **FireHOL IP Lists** | 400+ feeds curados con histórico | No | Enricher nuevo (mismo patrón que IPsum) |
 | **DigitalSide (osint.digitalside.it)** | Sale en STIX2/CSV/MISP | No | Enricher nuevo |
 | **jamesbrine.com.au** (referefref) | **Feed de honeypots internacionales**, CSV+STIX2 diario. Cruzar "¿las IPs que me pegan a mí también le pegan a su red global?" | No | Enricher nuevo — **alto valor**, es dato de sensor real |
+| **ANCI / CSIRT Nacional de Chile** (`csirt.gob.cl/api/v1/`) | La única fuente **estructurada** de intel local: IOCs tipados y CVEs con CVSS+EPSS ya calculados, emitidos por el CSIRT nacional | No (ni registro) | **Ya está** (`AnciEnricher` + `anci_client.py`, 2026-08-19) — ver la medición abajo |
+
+### ANCI / CSIRT Chile — medido por HTTP el 2026-08-19
+
+API pública, **sin API key y sin registro**, licencia **CC BY-SA 4.0** (atribución obligatoria;
+la pone el `name` del enricher, y el bloque de notas del prompt pide citar la fuente).
+Cinco endpoints: `alerts`, `news`, `documents`, `events`, `galleries` — el cliente cubre los cinco,
+el informe usa tres.
+
+| Qué | Medido |
+|---|---|
+| Alertas | **978** históricas · **189 en 2026** (~0,8/día) · 79 en los últimos 90 días |
+| IOCs | **604 en 2026** · 204 en los últimos 90 días (url 78, ipv4 51, mitre-attck 39, sha256 15…) |
+| CVEs | **1.235** en los últimos 90 días, con CVSS y EPSS ya calculados por ellos |
+| Tipos de alerta | Campaña Fraudulenta 66 · Vulnerabilidad Crítica 12 · Investigación de Amenazas 1 (90 d) |
+| Coste por corrida | **1 petición** el caso normal (caché en disco: alertas 6 h, noticias 24 h, documentos 7 d) |
+
+**Las seis trampas, todas medidas** (varias contradicen la documentación del propio endpoint):
+
+1. **`/alerts/` NO viene en orden de publicación**, aunque su `description` lo afirme: viene por
+   `latest_revision_created_at` desc (1049 pares invertidos respecto de `date` en la página 1
+   real, 0 respecto de la revisión). El cliente **pagina por revisión y filtra por publicación**.
+2. **`from_date`/`to_date` filtran por revisión**, no por publicación → no se usan.
+3. **`/news/` no viene ordenado**: la noticia más nueva estaba en la **página 3 de 3**. Hay que
+   paginar entero y ordenar en local.
+4. **`/documents/` no trae fecha.** Dos categorías reales: `boletines/ediciones-anteriores` (256)
+   y `documentos/informes-historicos` (44). "Qué es nuevo" se resuelve por diff contra el snapshot
+   de la corrida anterior; la primera corrida sólo fija la línea base.
+5. **Rate limit no documentado, detrás de Cloudflare**: responde `429` o un cuerpo de texto plano
+   `error code: 1015` que **no es JSON**. Saltó encadenando alertas + noticias + documentos con
+   0,5 s entre peticiones. De ahí el throttle de cliente (2 s **entre peticiones**, no entre
+   páginas) y la caché con fail-open a copia vencida.
+6. `page_size` topea en **100 en silencio** (pedir 200 devuelve 100, sin error).
+
+**Y la trampa del dato, que es la más importante para quien lo consuma:** las IPs de ANCI son las
+del **alojamiento** del sitio fraudulento, no las del atacante — **17 de las 42 IPs del volcado real
+son direcciones de borde de Cloudflare** (40 %). `data/feeds/anci-ips.txt` **no es una blocklist
+para meter en un firewall**; el enricher, cuando una IP cruza, emite además una nota de cautela
+para que el modelo no lea "figura en una alerta" como "es maliciosa". Las URLs y los hashes sí son
+del atacante.
+
+Lo que **no** se hizo, y por qué: **cruzar el host de las URLs**. En el corpus real hay campañas
+cuyo IOC es un redirector abusado (`https://www.google.com/share.google?q=…`, ACF26-01147) o un
+hosting compartido (`*.cpanel.site`); indexar el host emitiría "google.com aparece en una alerta
+del CSIRT". El cruce va por **valor exacto**: acierta poco, pero no miente.
+
+**No publican RSS** (verificado: `/rss/` y `/feed/` dan 404 y el HTML no declara
+`<link rel=alternate>`), así que la API es la única vía y no hay feed que dar de alta en Miniflux.
 
 ### Capa 3 — Enriquecimiento bajo demanda (no son feeds; se consultan puntualmente)
 

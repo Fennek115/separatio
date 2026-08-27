@@ -590,6 +590,7 @@ def build_weekly_prompt(
     dates: list[str],
     week_label: str,
     language: str = "español",
+    enrichment=None,
 ) -> str:
     from collections import Counter
 
@@ -621,6 +622,10 @@ def build_weekly_prompt(
             f"    CVEs: {cves_str}"
         )
 
+    # El enrichment llegaba a las cuatro fases diarias desde F-I, pero el weekly
+    # no corría Stage 2.7 en absoluto: se generaba sólo con las cachés de Stage 2.
+    ctx_block = _context_blocks(None, None, enrichment, "weekly")
+
     return f"""Eres un analista senior de threat intelligence elaborando el resumen semanal consolidado.
 
 SEMANA: {week_label} ({start_date} → {end_date}) — {len(dates)} días analizados
@@ -630,7 +635,7 @@ CVEs MÁS FRECUENTES: {top_cves}
 ACTORES MÁS ACTIVOS: {top_actors}
 TIPOS DE AMENAZA DOMINANTES: {top_types}
 IOCs RELEVANTES: {', '.join(all_iocs[:20]) or 'ninguno'}
-
+{ctx_block}
 ARTÍCULOS MÁS RELEVANTES DE LA SEMANA:
 {chr(10).join(items)}
 
@@ -1177,8 +1182,9 @@ def generate_weekly_report(
     num_threads: int = 0,
     max_tokens: int = 4000,
     provider: str = "ollama",
+    enrichment=None,
 ) -> str:
-    prompt = build_weekly_prompt(summaries, dates, week_label, language)
+    prompt = build_weekly_prompt(summaries, dates, week_label, language, enrichment)
 
     try:
         result = _llm_chat(

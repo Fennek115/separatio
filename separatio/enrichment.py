@@ -119,6 +119,13 @@ class EnrichmentContext:
     # Tope de veredictos por fuente que entran al prompt (F-G/G-2): lo puebla
     # `run_enrichment` desde el `Settings` que reciba. None → del `config` global.
     cap: int | None = None
+    # CVEs del día (las que extrajo Stage 2), en mayúsculas. Lo puebla
+    # `run_enrichment`; queda vacío si nadie lo pobló (import suelto, tests que
+    # construyen el contexto a mano). Existe para los enrichers que cruzan
+    # **vulnerabilidades** y no IOCs —hoy `CSIRT Chile (ANCI)`, que trae alertas
+    # nacionales con CVSS y EPSS ya calculados—, sin tener que cambiar la firma
+    # de `Enricher.enrich`, que sólo recibe el mapa de IOCs.
+    cves: set = field(default_factory=set)
 
     def add(self, verdict: IocVerdict) -> None:
         self.verdicts.append(verdict)
@@ -229,6 +236,8 @@ def run_enrichment(
     if settings is not None:
         ctx.cap = int((settings.PROMPT_CAPS or {}).get("verdicts_per_source",
                                                        DEFAULT_PROMPT_CAP))
+    ctx.cves = {c.strip().upper() for s in summaries
+                for c in (getattr(s, "cves", None) or []) if str(c).strip()}
     iocs = collect_iocs(summaries)
     if not iocs:
         logger.info("  Enrichment: no hay IOCs para enriquecer")
