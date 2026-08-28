@@ -141,17 +141,30 @@ def parse_beelzebub(lines, cutoff, bump, record):
         record(when, ip, "vm2-services", kind, action, pb)
 
 
-def parse_cowrie_downloads(tarp, dl_meta, klass, payloads, events):
+def parse_cowrie_downloads(tarp, dl_meta, klass, payloads, events, known=None):
     """VM1 Cowrie: binarios descargados en sesión (2º stage real) al corpus.
 
     Cowrie los nombra por SHA-256; se hashea de nuevo por las dudas y se atribuye
-    a la IP/hora del evento file_download correspondiente."""
+    a la IP/hora del evento file_download correspondiente.
+
+    `known` es un `{sha: size}` del corpus ya archivado (`hashes.log`). El pull
+    trae SIEMPRE el `downloads/` entero de la VM (no incremental), así que sin
+    este atajo cada muestra vieja se vuelve a leer entera en memoria en cada
+    corrida — es lo que hizo crecer el proceso hasta el OOM del CT (2026-08-24,
+    ver memoria de sesión). Si el nombre del miembro ya está en `known` con el
+    mismo tamaño, se confía en la convención de nombre de Cowrie y no se lee el
+    contenido; si no coincide (nombre nuevo o tamaño distinto) se cae al
+    rehasheo de siempre, así que nunca se pierde una muestra genuinamente nueva."""
+    known = known or {}
     if not tarp.exists() or not tarp.stat().st_size:
         return
     try:
         with tarfile.open(tarp) as tf:
             for m in tf.getmembers():
                 if not m.isfile() or not m.size:
+                    continue
+                candidate = Path(m.name).name
+                if known.get(candidate) == m.size:
                     continue
                 f = tf.extractfile(m)
                 data = f.read() if f else b""
@@ -170,6 +183,44 @@ def parse_cowrie_downloads(tarp, dl_meta, klass, payloads, events):
                                "sha256": sha, "size": len(data)})
     except Exception:
         pass
+
+
+def _load_known_sizes(hashlog: Path) -> dict:
+    """`{sha: size}` del corpus ya archivado, para que `parse_cowrie_downloads`
+    pueda saltar la lectura de una muestra ya conocida sin abrir el tar."""
+    known = {}
+    if not hashlog.exists():
+        return known
+    for line in hashlog.read_text(errors="ignore").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 5 and parts[4].isdigit():
+            known[parts[0]] = int(parts[4])
+    return known
+
+
+def _gap_warning(out: Path, now: datetime, window: int) -> str | None:
+    """Si pasó más tiempo del que cubre `window` desde el último `attackers.json`,
+    devuelve un aviso: `pull_honeypot.sh` sólo trae el log VIVO de cada VM (nunca
+    los rotados), así que un corte más largo que la ventana dejó un hueco que
+    esta corrida no puede recuperar sola — antes esto se perdía en silencio
+    (causa raíz de la caída del CT 113 documentada 2026-08-27 en memoria)."""
+    prev = out / "attackers.json"
+    if not prev.exists():
+        return None
+    try:
+        last = ts(json.loads(prev.read_text()).get("generated"))
+    except Exception:
+        return None
+    if not last:
+        return None
+    gap_hours = (now - last).total_seconds() / 3600
+    if gap_hours <= window:
+        return None
+    return (f"[pull] AVISO: pasaron {gap_hours:.1f}h desde la última corrida "
+            f"pero la ventana es de {window}h — hay un hueco de "
+            f"~{gap_hours - window:.1f}h que este pull NO recupera (solo trae "
+            f"el log vivo de cada VM, no los rotados). Ver docs/CAPAS-Y-FUENTES.md "
+            f"o pull manual con ventana ampliada si los rotados siguen vivos en la VM.")
 
 
 def write_artifacts(raw, out, daydir, payload, events, payloads):
@@ -343,13 +394,25 @@ def consolidate(raw: Path, out: Path, window: int, classifier=None,
                        "sha256": sha, "size": len(payload) if payload else 0})
 
     def lines(name):
+        """Itera el archivo línea a línea en vez de cargarlo entero en memoria.
+
+        `read_text().splitlines()` mantenía en RAM el string completo MÁS la
+        lista de líneas — con `beelzebub.json` en un pico de 218 MB (VM2 sin
+        tope real de tráfico, 2026-08-27) eso solo alcanzaba para tirar el
+        cgroup de 512 MB del CT. Iterando el archivo, el pico pasa a depender
+        de lo que sobrevive al filtro de ventana en `parse_*`, no del tamaño
+        del archivo en disco."""
         p = raw / name
-        return p.read_text(errors="ignore").splitlines() if p.exists() else []
+        if not p.exists():
+            return
+        with p.open(encoding="utf-8", errors="ignore") as f:
+            yield from f
 
     parse_cowrie(lines("cowrie.json"), cutoff, bump, record, att, dl_meta)
     parse_web(lines("web.json"), cutoff, bump, record)
     parse_beelzebub(lines("beelzebub.json"), cutoff, bump, record)
-    parse_cowrie_downloads(raw / "cowrie_downloads.tar", dl_meta, klass, payloads, events)
+    parse_cowrie_downloads(raw / "cowrie_downloads.tar", dl_meta, klass, payloads, events,
+                           known=_load_known_sizes(out / "hashes.log"))
 
     # --- CrowdSec: marcar IPs con decisión, ATRIBUYENDO EL SENSOR ---
     # Son dos CrowdSec independientes, uno por VM, y cada uno mira sólo el sshd
@@ -385,6 +448,7 @@ def consolidate(raw: Path, out: Path, window: int, classifier=None,
     attackers.sort(key=lambda a: a["hits"], reverse=True)
 
     generated = datetime.now(timezone.utc)
+    gap_warning = _gap_warning(out, generated, window)
     hygiene = {
         "self_excluded": len(hyg["self_ips"]),
         "self_hits": hyg["self_hits"],
@@ -413,7 +477,7 @@ def consolidate(raw: Path, out: Path, window: int, classifier=None,
 
     return {"attackers": attackers, "events": events, "payloads": payloads,
             "new_payloads": new_payloads, "daydir": daydir, "out": out,
-            "hygiene": hygiene, "store": store_stats}
+            "hygiene": hygiene, "store": store_stats, "gap_warning": gap_warning}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -423,6 +487,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     raw, out, window = Path(argv[0]), Path(argv[1]), int(argv[2])
     r = consolidate(raw, out, window)
+
+    if r.get("gap_warning"):
+        print(r["gap_warning"])
+        logger.warning(r["gap_warning"])
 
     attackers, events, payloads = r["attackers"], r["events"], r["payloads"]
     h = r["hygiene"]

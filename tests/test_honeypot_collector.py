@@ -6,8 +6,11 @@ export de IOCs, y deja pasar sólo lo desconocido — que es lo interesante.
 """
 
 import csv
+import hashlib
+import io
 import json
-from datetime import datetime, timezone
+import tarfile
+from datetime import datetime, timedelta, timezone
 
 from separatio.honeypot_collector import consolidate
 from separatio.hygiene import IpClassifier
@@ -242,3 +245,83 @@ def test_la_suite_no_toca_el_store_del_repo(tmp_path):
 
     despues = real.stat().st_mtime_ns if real.exists() else None
     assert antes == despues, f"la suite escribió en el store real: {real}"
+
+
+# ── memoria: no releer el corpus conocido, avisar si hubo un hueco ──────────
+# (causa raíz del OOM del CT 113, 2026-08-24 — ver memoria de sesión)
+
+def _tar_con(nombre, contenido):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo(name=f"downloads/{nombre}")
+        info.size = len(contenido)
+        tf.addfile(info, io.BytesIO(contenido))
+    return buf.getvalue()
+
+
+def test_payload_ya_conocido_no_se_relee(tmp_path):
+    """El pull trae `downloads/` entero cada vez (no incremental): sin este
+    atajo, cada muestra vieja se vuelve a leer entera en memoria por siempre."""
+    raw = _raw(tmp_path, ips=())
+    out = tmp_path / "out"
+    contenido_real = b"A" * 40
+    sha = hashlib.sha256(contenido_real).hexdigest()
+    (raw / "cowrie_downloads.tar").write_bytes(_tar_con(sha, contenido_real))
+
+    r1 = consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+    assert r1["new_payloads"] == 1
+    assert (out / "payloads" / f"{sha}.bin").read_bytes() == contenido_real
+
+    # Segunda corrida: mismo nombre+tamaño ya conocidos -> no se lee el
+    # contenido. Si se leyera, este contenido falso pisaría el corpus.
+    contenido_falso = b"B" * 40
+    (raw / "cowrie_downloads.tar").write_bytes(_tar_con(sha, contenido_falso))
+    r2 = consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+    assert r2["new_payloads"] == 0
+    assert (out / "payloads" / f"{sha}.bin").read_bytes() == contenido_real
+
+
+def test_payload_con_tamano_distinto_si_se_relee(tmp_path):
+    """Si el tamaño no coincide con lo conocido, no se confía en el nombre —
+    se cae al rehasheo de siempre (nunca se pierde una muestra genuina)."""
+    raw = _raw(tmp_path, ips=())
+    out = tmp_path / "out"
+    contenido_real = b"A" * 40
+    sha = hashlib.sha256(contenido_real).hexdigest()
+    (raw / "cowrie_downloads.tar").write_bytes(_tar_con(sha, contenido_real))
+    consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+
+    contenido_nuevo = b"C" * 80          # mismo nombre, tamaño distinto
+    sha_nuevo = hashlib.sha256(contenido_nuevo).hexdigest()
+    (raw / "cowrie_downloads.tar").write_bytes(_tar_con(sha, contenido_nuevo))
+    r2 = consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+    assert r2["new_payloads"] == 1
+    assert (out / "payloads" / f"{sha_nuevo}.bin").read_bytes() == contenido_nuevo
+
+
+def test_gap_mayor_a_la_ventana_avisa(tmp_path):
+    raw = _raw(tmp_path)
+    out = tmp_path / "out"
+    consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+    vieja = json.loads((out / "attackers.json").read_text())
+    vieja["generated"] = (datetime.now(timezone.utc) - timedelta(hours=50)).isoformat()
+    (out / "attackers.json").write_text(json.dumps(vieja))
+
+    r = consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+    assert r["gap_warning"] is not None
+    assert "hueco" in r["gap_warning"]
+
+
+def test_sin_gap_no_avisa(tmp_path):
+    raw = _raw(tmp_path)
+    out = tmp_path / "out"
+    consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+    r = consolidate(raw, out, 24, db_path=db.MEMORY, classifier=_clf())
+    assert r["gap_warning"] is None
+
+
+def test_primera_corrida_no_avisa(tmp_path):
+    """Sin `attackers.json` previo no hay con qué comparar: no es un hueco,
+    es la primera corrida."""
+    r, _ = _run(tmp_path)
+    assert r["gap_warning"] is None
