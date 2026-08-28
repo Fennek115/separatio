@@ -27,6 +27,7 @@ import ipaddress
 import json
 import logging
 import re
+import shutil
 import sys
 import tarfile
 from datetime import datetime, timedelta, timezone
@@ -268,11 +269,16 @@ def write_artifacts(raw, out, daydir, payload, events, payloads):
     (daydir / "raw").mkdir(parents=True, exist_ok=True)
     (daydir / "attackers.json").write_text(json.dumps(payload, indent=1))
     write_csv(daydir / "iocs.csv")
+    # Copia binaria, NO read_text()/write_text(): decodificar+reencodear un
+    # `beelzebub.json` de 108 MB con `errors="ignore"` medía picos de ~980 MB
+    # (contra ~9 MB de shutil.copyfile) — era el verdadero responsable del OOM
+    # del CT 113, más grande que el propio parseo. De paso, copiar bytes crudos
+    # no mutila secuencias inválidas en un archivo pensado como evidencia.
     for name in ("cowrie.json", "web.json", "decisions.json",
                  "decisions_vm2.json", "beelzebub.json"):
         src = raw / name
         if src.exists() and src.stat().st_size:
-            (daydir / "raw" / name).write_text(src.read_text(errors="ignore"))
+            shutil.copyfile(src, daydir / "raw" / name)
 
     # (3) Línea de tiempo de TÉCNICAS (ordenada, por fecha) + rolling.
     if events:
